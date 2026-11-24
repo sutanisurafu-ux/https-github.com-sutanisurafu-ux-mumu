@@ -50,6 +50,7 @@ import {
   exitBloodCastle,
   grantExperience,
   performGrandReset,
+  resolvePlayerDeathInZone,
   unequipItemToInventory,
   upgradeItemWithJewel,
 } from './game/rules';
@@ -1695,7 +1696,21 @@ export default function App() {
         });
       } else if (e.code === 'KeyR' && phase === 'playing' && activeDrawer === 'none') {
         e.preventDefault();
-        engineActionsRef.current?.resetTerritoryArena(true);
+        if (playerStateRef.current.inBloodCastle) {
+          const exited = exitBloodCastle(playerStateRef.current);
+          playerStateRef.current = exited;
+          setPlayer(exited);
+          const originCity =
+            TERRITORIES.find((t) => t.id === exited.territoryId) ?? TERRITORIES[0];
+          setTimeout(() => {
+            engineActionsRef.current?.notifyStatusMessage(
+              `🩸 Попытка в Blood Castle завершена — возврат в город «${originCity.name}».`,
+              '#38bdf8'
+            );
+          }, 60);
+        } else {
+          engineActionsRef.current?.resetTerritoryArena(true);
+        }
       }
     };
 
@@ -1889,10 +1904,20 @@ export default function App() {
 
   const handlePlayerDefeated = useCallback(
     (bossHpRemaining: number) => {
+      const deathOutcome = resolvePlayerDeathInZone(playerStateRef.current);
+      if (deathOutcome.exitedBloodCastle) {
+        playerStateRef.current = deathOutcome.nextState;
+        setPlayer(deathOutcome.nextState);
+        setAutoHunt(false);
+        persistActiveCharacterNow(false);
+        setTimeout(() => {
+          engineActionsRef.current?.notifyStatusMessage(deathOutcome.message, '#f43f5e');
+        }, 60);
+      }
       setEndSnapshot(buildSnapshot('defeat', bossHpRemaining));
       setPhase('gameover');
     },
-    [buildSnapshot]
+    [buildSnapshot, persistActiveCharacterNow]
   );
 
   const handleAllocateStat = (stat: keyof CharacterAttributes, amount = 1) => {
@@ -2286,7 +2311,21 @@ export default function App() {
               }
             }}
             onRestart={() => {
-              engineActionsRef.current?.resetTerritoryArena(true);
+              if (playerStateRef.current.inBloodCastle) {
+                const exited = exitBloodCastle(playerStateRef.current);
+                playerStateRef.current = exited;
+                setPlayer(exited);
+                const originCity =
+                  TERRITORIES.find((t) => t.id === exited.territoryId) ?? TERRITORIES[0];
+                setTimeout(() => {
+                  engineActionsRef.current?.notifyStatusMessage(
+                    `🩸 Попытка в Blood Castle завершена — возврат в город «${originCity.name}».`,
+                    '#38bdf8'
+                  );
+                }, 60);
+              } else {
+                engineActionsRef.current?.resetTerritoryArena(true);
+              }
             }}
           />
 
@@ -2451,9 +2490,17 @@ export default function App() {
               : undefined
           }
           onRestart={() => {
+            const wasInBc = playerStateRef.current.inBloodCastle;
+            if (wasInBc) {
+              const exited = exitBloodCastle(playerStateRef.current);
+              playerStateRef.current = exited;
+              setPlayer(exited);
+            }
             setPhase('playing');
             setEndSnapshot(null);
-            engineActionsRef.current?.resetTerritoryArena(true);
+            if (!wasInBc) {
+              engineActionsRef.current?.resetTerritoryArena(true);
+            }
           }}
           onReturnTitle={handleReturnToLobby}
         />

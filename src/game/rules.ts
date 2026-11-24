@@ -2420,17 +2420,70 @@ export function exitBloodCastle(state: PlayerProgressState): PlayerProgressState
 }
 
 /**
+ * Handles player death in the current zone:
+ * - Inside Blood Castle: ONLY 1 attempt is allowed! Immediately exits Blood Castle
+ *   (`inBloodCastle = false`) while keeping `territoryId` so the hero respawns in the exact
+ *   city they departed from (cannot endlessly respawn or reset the Blood Castle timer).
+ * - Outside Blood Castle: keeps the hero in their current territory to respawn in its Safe Zone.
+ */
+export function resolvePlayerDeathInZone(state: PlayerProgressState): {
+  nextState: PlayerProgressState;
+  exitedBloodCastle: boolean;
+  originTerritoryId: TerritoryId;
+  originTerritoryName: string;
+  message: string;
+} {
+  const originTerritory =
+    TERRITORIES.find((t) => t.id === state.territoryId) ?? TERRITORIES[0];
+
+  if (state.inBloodCastle) {
+    return {
+      nextState: exitBloodCastle(state),
+      exitedBloodCastle: true,
+      originTerritoryId: originTerritory.id,
+      originTerritoryName: originTerritory.name,
+      message: `💀 Вы погибли в Blood Castle (только 1 попытка)! Возрождение в городе: ${originTerritory.name}.`,
+    };
+  }
+
+  return {
+    nextState: state,
+    exitedBloodCastle: false,
+    originTerritoryId: originTerritory.id,
+    originTerritoryName: originTerritory.name,
+    message: `💀 Герой пал в бою. Возрождение в безопасной зоне: ${originTerritory.name}.`,
+  };
+}
+
+/**
+ * Rolls Jewel of Chaos reward for completing Blood Castle:
+ * - 80% -> 1 Jewel of Chaos
+ * - 18% -> 2 Jewel of Chaos
+ * -  2% -> 3 Jewel of Chaos
+ */
+export function rollBloodCastleChaosReward(roll = Math.random()): 1 | 2 | 3 {
+  const safeRoll = Number.isFinite(roll) ? Math.max(0, Math.min(0.9999999, roll)) : 0;
+  const { oneChaosChance, twoChaosChance } = BLOOD_CASTLE_CONFIG.questRewards.chaosRewardChances;
+  if (safeRoll < oneChaosChance) return 1;
+  if (safeRoll < oneChaosChance + twoChaosChance) return 2;
+  return 3;
+}
+
+/**
  * Rewards the hero for completing the 4-stage Blood Castle event quest.
  */
-export function completeBloodCastleQuest(state: PlayerProgressState): {
+export function completeBloodCastleQuest(
+  state: PlayerProgressState,
+  chaosRoll = Math.random()
+): {
   nextState: PlayerProgressState;
-  chaosReward: number;
+  chaosReward: 1 | 2 | 3;
   expReward: number;
   zenReward: number;
   message: string;
 } {
   const qr = BLOOD_CASTLE_CONFIG.questRewards;
-  const chaosReward = qr.jewelOfChaosCount;
+  const chaosReward = rollBloodCastleChaosReward(chaosRoll);
   const expReward = Math.round(
     calculateExpToNextLevel(state.level) *
       qr.expMultiplierOfNextLevel *

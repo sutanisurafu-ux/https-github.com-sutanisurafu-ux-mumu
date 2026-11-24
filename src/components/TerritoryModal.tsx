@@ -94,7 +94,14 @@ export const TerritoryModal: React.FC<TerritoryModalProps> = ({
                   </h3>
                 </div>
                 <p className="mt-1 text-[11px] leading-snug text-[#dfd6c9] sm:text-xs">
-                  Мост над Кровавой Бездной: <span className="font-semibold text-amber-300">1) 100 мобов → 2) Ворота → 3) Статуя → 4) Оружие Архангела.</span> Награда: <span className="font-bold text-emerald-300">+3 Jewel of Chaos и Опыт</span>!
+                  Мост над Кровавой Бездной (1 попытка — при смерти возврат в город):{' '}
+                  <span className="font-semibold text-amber-300">
+                    1) 100 мобов → 2) Ворота → 3) Статуя → 4) Оружие Архангела.
+                  </span>{' '}
+                  Награда:{' '}
+                  <span className="font-bold text-emerald-300">
+                    1–3 Jewel of Chaos (80% — 1, 18% — 2, 2% — 3) и Опыт
+                  </span>!
                 </p>
                 <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono-num text-[10px] text-[#bfb5a4] sm:text-[11px]">
                   <span>📜 Scroll: <strong className="text-amber-200">{player.bloodScrolls}</strong></span>

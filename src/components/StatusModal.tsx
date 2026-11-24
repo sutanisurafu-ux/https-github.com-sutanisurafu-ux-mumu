@@ -108,7 +108,9 @@ export const StatusModal: React.FC<StatusModalProps> = ({
                 : 'gothic-button text-[#f3efe6]'
             }`}
           >
-            {isVictory ? 'Продолжить Завоевание' : 'Возродиться в Лоренсии'}
+            {isVictory
+              ? 'Продолжить Завоевание'
+              : `Возродиться в городе (${snapshot.territoryName.replace(/^\d+\.\s*/, '')})`}
           </button>
 
           <button

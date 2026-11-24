@@ -341,7 +341,7 @@ test('Bosses drop Jewel of Chaos with 20% chance in ANY territory while regular 
   assert.ok(afterAllocResetStats.defense > beforeResetStats.defense * 1.25);
 });
 
-test('Blood Castle Ticket crafting uses 1 Blood Scroll + 1 Blood Fang + 1 Jewel of Chaos with 80% success rate, and quest completion awards +3 Jewel of Chaos and EXP', async () => {
+test('Blood Castle Ticket crafting uses 1 Blood Scroll + 1 Blood Fang + 1 Jewel of Chaos with 80% success rate, and quest completion awards probabilistic 1-3 Jewel of Chaos and EXP', async () => {
   const {
     craftBloodCastleTicket,
     enterBloodCastle,
@@ -384,8 +384,9 @@ test('Blood Castle Ticket crafting uses 1 Blood Scroll + 1 Blood Fang + 1 Jewel 
   assert.equal(entered.nextState.inBloodCastle, true);
   assert.equal(entered.nextState.bloodCastleTickets, 0);
 
-  // Completing the 4-stage Blood Castle quest awards +3 Jewel of Chaos, massive EXP (levels up), and Zen
-  const completed = completeBloodCastleQuest(entered.nextState);
+  // Completing the 4-stage Blood Castle quest awards rolled Jewel of Chaos (roll 0.99 -> 3), massive EXP, and Zen
+  const completed = completeBloodCastleQuest(entered.nextState, 0.99);
+  assert.equal(completed.chaosReward, 3);
   assert.equal(completed.nextState.jewels.chaos, entered.nextState.jewels.chaos + 3);
   assert.ok(completed.nextState.level > entered.nextState.level);
   assert.equal(completed.nextState.bloodCastleClears, 1);
@@ -1924,6 +1925,94 @@ test('extractServerOnlinePlayers returns exact online count and strictly nicknam
     assert.deepEqual(Object.keys(p).sort(), ['nickname', 'status']);
   }
 });
+
+test('Blood Castle death enforces single attempt (exits to origin city) and completion Chaos reward follows 80%/18%/2% distribution', async () => {
+  const {
+    enterBloodCastle,
+    resolvePlayerDeathInZone,
+    rollBloodCastleChaosReward,
+    completeBloodCastleQuest,
+  } = await import('./rules');
+  const { BLOOD_CASTLE_CONFIG } = await import('../config/respawns');
+
+  // 1. Verify exact probability config sums to 100%
+  const chances = BLOOD_CASTLE_CONFIG.questRewards.chaosRewardChances;
+  assert.equal(chances.oneChaosChance, 0.8);
+  assert.equal(chances.twoChaosChance, 0.18);
+  assert.equal(chances.threeChaosChance, 0.02);
+  assert.ok(Math.abs(chances.oneChaosChance + chances.twoChaosChance + chances.threeChaosChance - 1) < 1e-9);
+
+  // 2. Boundary checks for rollBloodCastleChaosReward
+  // 80%: [0, 0.80) -> 1 Chaos
+  assert.equal(rollBloodCastleChaosReward(0), 1);
+  assert.equal(rollBloodCastleChaosReward(0.45), 1);
+  assert.equal(rollBloodCastleChaosReward(0.7999), 1);
+  // 18%: [0.80, 0.98) -> 2 Chaos
+  assert.equal(rollBloodCastleChaosReward(0.8), 2);
+  assert.equal(rollBloodCastleChaosReward(0.9), 2);
+  assert.equal(rollBloodCastleChaosReward(0.9799), 2);
+  // 2%: [0.98, 1.0) -> 3 Chaos
+  assert.equal(rollBloodCastleChaosReward(0.98), 3);
+  assert.equal(rollBloodCastleChaosReward(0.995), 3);
+  assert.equal(rollBloodCastleChaosReward(0.9999), 3);
+
+  // 3. Uniform 1000-bucket distribution verification: strictly 800 / 180 / 20
+  const counts = { 1: 0, 2: 0, 3: 0 };
+  for (let i = 0; i < 1000; i++) {
+    const rolled = rollBloodCastleChaosReward((i + 0.5) / 1000);
+    counts[rolled] += 1;
+  }
+  assert.equal(counts[1], 800);
+  assert.equal(counts[2], 180);
+  assert.equal(counts[3], 20);
+
+  // 4. completeBloodCastleQuest awards exact rolled Chaos count
+  const heroInBc = {
+    ...createInitialPlayerState('dark_knight'),
+    territoryId: 'devias' as const,
+    bloodCastleTickets: 1,
+  };
+  const entered = enterBloodCastle(heroInBc);
+  assert.equal(entered.success, true);
+  assert.equal(entered.nextState.inBloodCastle, true);
+  assert.equal(entered.nextState.territoryId, 'devias');
+  assert.equal(entered.nextState.bloodCastleTickets, 0);
+
+  const c1 = completeBloodCastleQuest(entered.nextState, 0.25);
+  assert.equal(c1.chaosReward, 1);
+  assert.equal(c1.nextState.jewels.chaos, entered.nextState.jewels.chaos + 1);
+
+  const c2 = completeBloodCastleQuest(entered.nextState, 0.85);
+  assert.equal(c2.chaosReward, 2);
+  assert.equal(c2.nextState.jewels.chaos, entered.nextState.jewels.chaos + 2);
+
+  const c3 = completeBloodCastleQuest(entered.nextState, 0.99);
+  assert.equal(c3.chaosReward, 3);
+  assert.equal(c3.nextState.jewels.chaos, entered.nextState.jewels.chaos + 3);
+
+  // 5. Dying inside Blood Castle immediately kicks hero out to their exact origin city (Devias) — only 1 attempt!
+  const deathInBc = resolvePlayerDeathInZone(entered.nextState);
+  assert.equal(deathInBc.exitedBloodCastle, true);
+  assert.equal(deathInBc.nextState.inBloodCastle, false);
+  assert.equal(deathInBc.nextState.territoryId, 'devias');
+  assert.equal(deathInBc.originTerritoryId, 'devias');
+  // Re-entering without another ticket is rejected
+  const retryAttempt = enterBloodCastle(deathInBc.nextState);
+  assert.equal(retryAttempt.success, false);
+  assert.equal(retryAttempt.nextState.inBloodCastle, false);
+
+  // 6. Dying outside Blood Castle keeps hero in their current territory (e.g. Noria)
+  const heroInNoria = {
+    ...createInitialPlayerState('fairy_elf'),
+    territoryId: 'noria' as const,
+    inBloodCastle: false,
+  };
+  const deathInNoria = resolvePlayerDeathInZone(heroInNoria);
+  assert.equal(deathInNoria.exitedBloodCastle, false);
+  assert.equal(deathInNoria.nextState.inBloodCastle, false);
+  assert.equal(deathInNoria.nextState.territoryId, 'noria');
+});
+
 
 
 

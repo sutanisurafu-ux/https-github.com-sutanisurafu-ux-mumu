@@ -83,7 +83,10 @@ export const ChaosMachineModal: React.FC<ChaosMachineModalProps> = ({
                   </h3>
                 </div>
                 <p className="mt-1 text-xs text-[#dfd5c8]">
-                  Открывает вход в отдельную ивент-зону с мостом! Убейте 100 монстров на мосту, сломайте ворота, разбейте статую и принесите Оружие Архангела раненому Архангелу за <span className="text-amber-300 font-bold">+3 Jewel of Chaos и огромный Опыт</span>.
+                  Открывает вход в отдельную ивент-зону с мостом (только 1 попытка — при смерти герой возрождается в городе отправления)! Убейте 100 монстров на мосту, сломайте ворота, разбейте статую и принесите Оружие Архангела за{' '}
+                  <span className="text-amber-300 font-bold">
+                    1–3 Jewel of Chaos (80% — 1, 18% — 2, 2% — 3) и огромный Опыт
+                  </span>.
                 </p>
                 <div className="mt-2 flex flex-wrap items-center gap-2 font-mono-num text-xs">
                   <span

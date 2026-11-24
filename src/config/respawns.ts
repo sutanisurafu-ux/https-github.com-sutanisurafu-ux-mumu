@@ -173,7 +173,17 @@ export const BLOOD_CASTLE_CONFIG = {
   zenTerritoryPower: 0.6,
   /** Награды за полное выполнение квеста Архангела в Blood Castle */
   questRewards: {
-    jewelOfChaosCount: 3,
+    /**
+     * Вероятность выпадения Jewel of Chaos за прохождение Blood Castle (сумма = 100%):
+     * - 80% -> 1 Jewel of Chaos
+     * - 18% -> 2 Jewel of Chaos
+     * -  2% -> 3 Jewel of Chaos
+     */
+    chaosRewardChances: {
+      oneChaosChance: 0.8,
+      twoChaosChance: 0.18,
+      threeChaosChance: 0.02,
+    },
     expMultiplierOfNextLevel: 3.5,
     zenBase: 15_000,
     zenPerPlayerLevel: 150,
