@@ -256,7 +256,7 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
   onBuyShopEquipment,
 }) => {
   const [statusBanner, setStatusBanner] = useState<string | null>(
-    'Наведите мышь на любую вещь в инвентаре для просмотра данных! Чтобы выбросить вещь на землю — нажмите «Выбросить» или перетащите за пределы окна.'
+    'Наведите мышь на вещь для подсказки. В Лавке Ханзо: Ctrl + ЛКМ или перетаскивание в окно Лавки — продать! За пределы окна — выбросить.'
   );
   const [activeJewelCursor, setActiveJewelCursor] = useState<ActiveJewelCursor>(null);
   const [selectedTarget, setSelectedTarget] = useState<SelectedInspectorTarget>({
@@ -393,7 +393,24 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
     setStatusBanner(msg);
   };
 
-  const handleInventoryItemClick = (item: EquipmentItem) => {
+  const handleInventoryItemClick = (item: EquipmentItem, e?: React.MouseEvent) => {
+    if (e && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (shopOpen || isNearShop) {
+        onSellItem(item);
+        setHoverTooltip(null);
+        setSelectedTarget(null);
+        setStatusBanner(
+          `💰 Продано торговцу Ханзо (Ctrl + ЛКМ): ${item.name} за +${item.valueZen} Zen!`
+        );
+      } else {
+        setStatusBanner(
+          '🔒 Для быстрой продажи (Ctrl + ЛКМ) подойдите к Лавке Ханзо в городе!'
+        );
+      }
+      return;
+    }
     if (activeJewelCursor) {
       handleApplyJewelToItem(item.id, activeJewelCursor);
       return;
@@ -504,6 +521,7 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
 
   const handleDropOnGridContainer = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     const payload = resolveDragPayload(e);
     if (!payload) return;
     if (executeShopPurchaseDrop(payload)) {
@@ -647,6 +665,14 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
   return (
     <>
       <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
         className="pointer-events-auto fixed right-2.5 top-16 z-40 flex max-h-[82vh] w-[calc(100vw-20px)] max-w-[530px] flex-col overflow-hidden rounded-2xl border border-amber-500/40 bg-[#110e19]/95 shadow-[0_16px_48px_rgba(0,0,0,0.92)] sm:right-5 sm:top-20"
         role="dialog"
         aria-modal="false"
@@ -756,7 +782,9 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
                   : 'Сетка Инвентаря (32 ячейки · Наведите мышь на предмет для окна характеристик)'}
               </h3>
               <span className="text-[11px] text-[#b5ab9b]">
-                Двойной клик / ПКМ — надеть
+                {shopOpen || isNearShop
+                  ? 'Ctrl+ЛКМ — продать · ПКМ — надеть'
+                  : 'Двойной клик / ПКМ — надеть'}
               </span>
             </div>
 
@@ -961,6 +989,7 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
                             kind: 'equipment',
                             item,
                             context: 'inventory',
+                            canQuickSell: shopOpen || isNearShop,
                           },
                           clientX: e.clientX,
                           clientY: e.clientY,
@@ -968,7 +997,7 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
                       }}
                       onMouseMove={updateTooltipCoords}
                       onMouseLeave={() => setHoverTooltip(null)}
-                      onClick={() => handleInventoryItemClick(item)}
+                      onClick={(e) => handleInventoryItemClick(item, e)}
                       onDoubleClick={(e) => handleInventoryItemEquip(item, e)}
                       onContextMenu={(e) => handleInventoryItemEquip(item, e)}
                       role="gridcell"

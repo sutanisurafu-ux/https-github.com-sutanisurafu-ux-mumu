@@ -137,12 +137,35 @@ export interface ServerMonsterUnit {
   alive: boolean;
   respawnAtGameTimeSec: number; // 0 when alive
   aiState: 'move' | 'windup' | 'active' | 'recover' | 'ko';
+  stateTimer: number;
   telegraphX: number;
   telegraphY: number;
   facingAngle: number;
   walkDistance: number;
   chillTimer: number;
   orbitDirection: 1 | -1;
+  roamTargetX?: number;
+  roamTargetY?: number;
+}
+
+export interface ServerSimPlayerTarget {
+  id: string;
+  x: number;
+  y: number;
+  hp: number;
+}
+
+export interface ServerMonsterAttackEvent {
+  territoryId: TerritoryId;
+  enemyId: string;
+  monsterName: string;
+  archetype: EnemyArchetype;
+  isBoss: boolean;
+  hitCenterX: number;
+  hitCenterY: number;
+  hitRadius: number;
+  attackDamage: number;
+  timestamp: number;
 }
 
 /**
@@ -497,6 +520,7 @@ export function buildTerritoryUnitBlueprints(territoryId: TerritoryId): ServerMo
         alive: true,
         respawnAtGameTimeSec: 0,
         aiState: 'move',
+        stateTimer: 0.4 + hRole * 0.6,
         telegraphX: anchor.x,
         telegraphY: anchor.y,
         facingAngle: 0,
@@ -566,12 +590,15 @@ export function createTerritoryBossUnit(
     alive: true,
     respawnAtGameTimeSec: 0,
     aiState: 'move',
+    stateTimer: 0.8,
     telegraphX: spawn.x,
     telegraphY: spawn.y,
     facingAngle: 0,
     walkDistance: 0,
     chillTimer: 0,
     orbitDirection: 1,
+    roamTargetX: pickGoldenBossRoamWaypoint(spawn.x, spawn.y, randFn).x,
+    roamTargetY: pickGoldenBossRoamWaypoint(spawn.x, spawn.y, randFn).y,
   };
 }
 
@@ -766,6 +793,7 @@ export function reviveDueServerMonsters(
       unit.alive = true;
       unit.hp = unit.maxHp;
       unit.aiState = 'move';
+      unit.stateTimer = 0.6;
       unit.chillTimer = 0;
       unit.respawnAtGameTimeSec = 0;
       unit.x = nextPos.x;
@@ -776,6 +804,256 @@ export function reviveDueServerMonsters(
     }
   }
   return revived;
+}
+
+const SERVER_MAX_CONCURRENT_ATTACKERS = 5;
+const SERVER_MONSTER_AGGRO_RANGE = 340;
+const SERVER_BOSS_AGGRO_RANGE = 620;
+
+/**
+ * Pure, server-authoritative monster simulation step for a territory.
+ * Monsters exist, patrol, roam (Golden Bosses), aggro, chase, telegraph, and attack
+ * strictly relative to SERVER time — independent of any player tab being minimized or paused!
+ */
+export function stepServerZoneMonsters(
+  zoneMap: Map<string, ServerMonsterUnit>,
+  territoryId: TerritoryId,
+  playersInZone: ServerSimPlayerTarget[],
+  dtSec: number,
+  nowMs: number,
+  randFn: () => number = Math.random
+): ServerMonsterAttackEvent[] {
+  const dt = Math.max(0, Math.min(0.25, dtSec));
+  if (dt <= 0) return [];
+
+  const attacks: ServerMonsterAttackEvent[] = [];
+  const arenaLimit = WORLD_ARENA_HALF_SIZE - 50;
+  const activeOutsidePlayers = playersInZone.filter(
+    (p) => p.hp > 0 && Math.hypot(p.x, p.y) > WORLD_TOWN_SAFE_RADIUS
+  );
+
+  let activeAttackers = 0;
+  for (const u of zoneMap.values()) {
+    if (u.alive && !u.isStructure && (u.aiState === 'windup' || u.aiState === 'active')) {
+      activeAttackers++;
+    }
+  }
+
+  for (const unit of zoneMap.values()) {
+    if (!unit.alive || unit.hp <= 0 || unit.aiState === 'ko' || unit.isStructure) {
+      continue;
+    }
+
+    if (unit.chillTimer > 0) {
+      unit.chillTimer = Math.max(0, unit.chillTimer - dt);
+    }
+
+    const effSpeed = unit.moveSpeed * (unit.chillTimer > 0 ? 0.52 : 1.0);
+
+    // Find closest living player outside Safe Town
+    let nearestPlayer: ServerSimPlayerTarget | null = null;
+    let bestDist = Infinity;
+    for (const p of activeOutsidePlayers) {
+      const d = Math.hypot(p.x - unit.x, p.y - unit.y);
+      if (d < bestDist) {
+        bestDist = d;
+        nearestPlayer = p;
+      }
+    }
+
+    const aggroRange = unit.isBoss ? SERVER_BOSS_AGGRO_RANGE : SERVER_MONSTER_AGGRO_RANGE;
+    const isAggroed = nearestPlayer !== null && bestDist <= aggroRange;
+
+    if (!isAggroed) {
+      if (unit.aiState === 'windup' || unit.aiState === 'active') {
+        unit.aiState = 'move';
+        unit.stateTimer = 0.8;
+      }
+
+      if (unit.isBoss) {
+        // Golden Boss roams continuously across the wilderness outside Safe Town
+        if (unit.roamTargetX === undefined || unit.roamTargetY === undefined) {
+          const wp = pickGoldenBossRoamWaypoint(unit.x, unit.y, randFn);
+          unit.roamTargetX = wp.x;
+          unit.roamTargetY = wp.y;
+        }
+        const rdx = unit.roamTargetX - unit.x;
+        const rdy = unit.roamTargetY - unit.y;
+        const rDist = Math.hypot(rdx, rdy);
+        if (rDist < 75) {
+          const wp = pickGoldenBossRoamWaypoint(unit.x, unit.y, randFn);
+          unit.roamTargetX = wp.x;
+          unit.roamTargetY = wp.y;
+        } else {
+          const roamSpd = effSpeed * 0.62;
+          const rnx = rdx / rDist;
+          const rny = rdy / rDist;
+          unit.x += rnx * roamSpd * dt;
+          unit.y += rny * roamSpd * dt;
+          unit.facingAngle = Math.atan2(rny, rnx);
+          unit.walkDistance += roamSpd * dt;
+          const townD = Math.hypot(unit.x, unit.y);
+          if (townD < WORLD_TOWN_SAFE_RADIUS + 90) {
+            const pushA = townD > 1 ? Math.atan2(unit.y, unit.x) : 0;
+            unit.x = Math.cos(pushA) * (WORLD_TOWN_SAFE_RADIUS + 95);
+            unit.y = Math.sin(pushA) * (WORLD_TOWN_SAFE_RADIUS + 95);
+            const detour = pickGoldenBossRoamWaypoint(unit.x, unit.y, randFn);
+            unit.roamTargetX = detour.x;
+            unit.roamTargetY = detour.y;
+          }
+        }
+      } else {
+        // Regular monster returns to camp or gently patrols around its camp anchor
+        const toCampX = unit.campX - unit.x;
+        const toCampY = unit.campY - unit.y;
+        const distFromCamp = Math.hypot(toCampX, toCampY);
+        if (distFromCamp > 280) {
+          const rnx = toCampX / distFromCamp;
+          const rny = toCampY / distFromCamp;
+          unit.x += rnx * effSpeed * 0.7 * dt;
+          unit.y += rny * effSpeed * 0.7 * dt;
+          unit.facingAngle = Math.atan2(rny, rnx);
+          unit.walkDistance += effSpeed * 0.7 * dt;
+        } else {
+          const patrolA = nowMs * 0.0008 * unit.orbitDirection + unit.campX;
+          const px = Math.cos(patrolA);
+          const py = Math.sin(patrolA);
+          unit.x += px * effSpeed * 0.35 * dt;
+          unit.y += py * effSpeed * 0.35 * dt;
+          unit.facingAngle = Math.atan2(py, px);
+          unit.walkDistance += effSpeed * 0.35 * dt;
+        }
+      }
+    } else if (nearestPlayer) {
+      const dx = nearestPlayer.x - unit.x;
+      const dy = nearestPlayer.y - unit.y;
+      const dist = Math.max(1, bestDist);
+      unit.facingAngle = Math.atan2(dy, dx);
+
+      if (unit.aiState === 'move') {
+        if (unit.archetype === 'swarmer_skeleton') {
+          if (dist > unit.attackRange) {
+            unit.x += (dx / dist) * effSpeed * dt;
+            unit.y += (dy / dist) * effSpeed * dt;
+            unit.walkDistance += effSpeed * dt;
+          } else if (activeAttackers < SERVER_MAX_CONCURRENT_ATTACKERS) {
+            unit.aiState = 'windup';
+            unit.stateTimer = 0.42;
+            unit.telegraphX = nearestPlayer.x;
+            unit.telegraphY = nearestPlayer.y;
+            activeAttackers++;
+          }
+        } else if (unit.archetype === 'kiter_lich') {
+          if (dist < 115) {
+            unit.x -= (dx / dist) * effSpeed * 0.9 * dt;
+            unit.y -= (dy / dist) * effSpeed * 0.9 * dt;
+            unit.walkDistance += effSpeed * dt;
+          } else if (dist > unit.attackRange) {
+            unit.x += (dx / dist) * effSpeed * dt;
+            unit.y += (dy / dist) * effSpeed * dt;
+            unit.walkDistance += effSpeed * dt;
+          } else {
+            const perpX = (-dy / dist) * unit.orbitDirection;
+            const perpY = (dx / dist) * unit.orbitDirection;
+            unit.x += perpX * effSpeed * 0.65 * dt;
+            unit.y += perpY * effSpeed * 0.65 * dt;
+            unit.walkDistance += effSpeed * 0.65 * dt;
+            unit.stateTimer -= dt;
+            if (unit.stateTimer <= 0 && activeAttackers < SERVER_MAX_CONCURRENT_ATTACKERS) {
+              unit.aiState = 'windup';
+              unit.stateTimer = 0.55;
+              unit.telegraphX = nearestPlayer.x;
+              unit.telegraphY = nearestPlayer.y;
+              activeAttackers++;
+            }
+          }
+        } else if (unit.archetype === 'charger_bull') {
+          if (dist > unit.attackRange) {
+            unit.x += (dx / dist) * effSpeed * dt;
+            unit.y += (dy / dist) * effSpeed * dt;
+            unit.walkDistance += effSpeed * dt;
+          } else if (activeAttackers < SERVER_MAX_CONCURRENT_ATTACKERS) {
+            unit.aiState = 'windup';
+            unit.stateTimer = 0.52;
+            unit.telegraphX = Math.max(
+              -arenaLimit,
+              Math.min(arenaLimit, unit.x + (dx / dist) * 185)
+            );
+            unit.telegraphY = Math.max(
+              -arenaLimit,
+              Math.min(arenaLimit, unit.y + (dy / dist) * 185)
+            );
+            activeAttackers++;
+          }
+        } else {
+          // orbiter_gorgon (Golden Boss & Winged Guardians)
+          const perpX = (-dy / dist) * unit.orbitDirection;
+          const perpY = (dx / dist) * unit.orbitDirection;
+          const pull = dist > 135 ? 0.65 : -0.25;
+          unit.x += ((dx / dist) * pull + perpX * 0.75) * effSpeed * dt;
+          unit.y += ((dy / dist) * pull + perpY * 0.75) * effSpeed * dt;
+          unit.walkDistance += effSpeed * dt;
+          unit.stateTimer -= dt;
+          if (unit.stateTimer <= 0 && activeAttackers < SERVER_MAX_CONCURRENT_ATTACKERS) {
+            unit.aiState = 'windup';
+            unit.stateTimer = 0.65;
+            unit.telegraphX = nearestPlayer.x;
+            unit.telegraphY = nearestPlayer.y;
+            activeAttackers++;
+          }
+        }
+      } else if (unit.aiState === 'windup') {
+        unit.stateTimer -= dt;
+        if (unit.stateTimer <= 0) {
+          unit.aiState = 'active';
+          unit.stateTimer = 0.18;
+          if (unit.archetype === 'charger_bull') {
+            unit.x = unit.telegraphX;
+            unit.y = unit.telegraphY;
+          }
+          const hitCenterX = unit.archetype === 'swarmer_skeleton' ? unit.x : unit.telegraphX;
+          const hitCenterY = unit.archetype === 'swarmer_skeleton' ? unit.y : unit.telegraphY;
+          const hitRadius = unit.isBoss ? 105 : unit.archetype === 'kiter_lich' ? 68 : 62;
+          attacks.push({
+            territoryId,
+            enemyId: unit.id,
+            monsterName: unit.name,
+            archetype: unit.archetype,
+            isBoss: unit.isBoss,
+            hitCenterX: Math.round(hitCenterX),
+            hitCenterY: Math.round(hitCenterY),
+            hitRadius,
+            attackDamage: Math.round(unit.attackDamage),
+            timestamp: nowMs,
+          });
+        }
+      } else if (unit.aiState === 'active') {
+        unit.stateTimer -= dt;
+        if (unit.stateTimer <= 0) {
+          unit.aiState = 'recover';
+          unit.stateTimer = unit.isBoss ? 0.95 : 0.85;
+        }
+      } else if (unit.aiState === 'recover') {
+        unit.stateTimer -= dt;
+        if (unit.stateTimer <= 0) {
+          unit.aiState = 'move';
+          unit.stateTimer = unit.isBoss ? 0.8 : 0.9;
+        }
+      }
+    }
+
+    // Clamp strictly inside arena bounds and outside Safe Town perimeter
+    unit.x = Math.max(-arenaLimit, Math.min(arenaLimit, unit.x));
+    unit.y = Math.max(-arenaLimit, Math.min(arenaLimit, unit.y));
+    const dTown = Math.hypot(unit.x, unit.y);
+    if (dTown < WORLD_TOWN_SAFE_RADIUS + 24) {
+      const pushA = dTown > 1 ? Math.atan2(unit.y, unit.x) : 0;
+      unit.x = Math.cos(pushA) * (WORLD_TOWN_SAFE_RADIUS + 28);
+      unit.y = Math.sin(pushA) * (WORLD_TOWN_SAFE_RADIUS + 28);
+    }
+  }
+
+  return attacks;
 }
 
 export function extractDeadRespawnsRecord(
@@ -973,6 +1251,7 @@ export function buildBloodCastleBridgeUnits(
       alive: true,
       respawnAtGameTimeSec: 0,
       aiState: 'move',
+      stateTimer: 0.5,
       telegraphX: anchorX,
       telegraphY: anchorY,
       facingAngle: 0,

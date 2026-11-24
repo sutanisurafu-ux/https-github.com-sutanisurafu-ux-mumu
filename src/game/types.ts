@@ -534,5 +534,18 @@ export interface PlayerTradeSession {
   offers: Record<string, TradeSideOffer>;
 }
 
+export interface AccountCharacterRecord {
+  id: string;
+  accountId: string | null;
+  nickname: string;
+  player: PlayerProgressState;
+  posX: number;
+  posY: number;
+  currentHp: number;
+  currentMp: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 
 

@@ -53,3 +53,233 @@
 .gothic-button:active:not(:disabled) {
   transform: scale(0.96);
 }
+
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ===== MOBILE LANDSCAPE COMPACT MODE (Phones in Landscape: 360px - 540px height) ===== */
+@media (max-height: 540px) {
+  .mu-top-hud-compact {
+    padding: 4px max(6px, env(safe-area-inset-right)) 0 max(6px, env(safe-area-inset-left)) !important;
+    gap: 4px !important;
+  }
+
+  .mu-top-strip-compact {
+    padding: 2px 5px !important;
+    font-size: 9.5px !important;
+    gap: 4px !important;
+  }
+
+  .mu-top-left-compact {
+    max-width: 185px !important;
+  }
+
+  .mu-party-compact {
+    max-width: 175px !important;
+    padding: 3px 6px !important;
+  }
+
+  .mu-top-center-compact {
+    max-width: 210px !important;
+  }
+
+  .mu-boss-card-compact {
+    padding: 3px 6px !important;
+  }
+
+  .mu-territory-name-compact {
+    max-width: 68px !important;
+    font-size: 9.5px !important;
+  }
+
+  .mu-top-hide-short {
+    display: none !important;
+  }
+
+  .mu-chat-compact {
+    max-height: 34px !important;
+    overflow: hidden !important;
+    font-size: 9.5px !important;
+    line-height: 1.15 !important;
+    padding: 2px 5px !important;
+  }
+
+  .mu-minimap-compact {
+    padding: 2px !important;
+  }
+
+  .mu-minimap-compact canvas {
+    width: 54px !important;
+    height: 54px !important;
+  }
+
+  .mu-boss-pill-compact {
+    font-size: 9px !important;
+    padding: 1px 6px !important;
+  }
+
+  .mu-joystick-wrap-compact {
+    bottom: 62px !important;
+    left: max(10px, env(safe-area-inset-left)) !important;
+  }
+
+  .mu-joystick-pad-compact {
+    width: 68px !important;
+    height: 68px !important;
+  }
+
+  .mu-joystick-ring-compact {
+    width: 30px !important;
+    height: 30px !important;
+  }
+
+  .mu-joystick-knob-compact {
+    width: 28px !important;
+    height: 28px !important;
+  }
+
+  .mu-dock-row-compact {
+    padding: 2px max(6px, env(safe-area-inset-right)) 3px max(6px, env(safe-area-inset-left)) !important;
+    gap: 4px !important;
+  }
+
+  .mu-dock-wing-compact {
+    display: none !important;
+  }
+
+  .mu-dock-mobile-auto {
+    display: flex !important;
+  }
+
+  .mu-orb-wrap-compact {
+    margin-top: -10px !important;
+    gap: 4px !important;
+  }
+
+  .mu-orb-compact {
+    width: 38px !important;
+    height: 38px !important;
+  }
+
+  .mu-orb-label-compact {
+    font-size: 9px !important;
+    margin-top: 1px !important;
+  }
+
+  .mu-center-console-compact {
+    gap: 2px !important;
+    padding-left: 2px !important;
+    padding-right: 2px !important;
+  }
+
+  .mu-exp-bar-compact {
+    height: 7px !important;
+  }
+
+  .mu-exp-digit-compact {
+    min-width: 18px !important;
+    height: 14px !important;
+    font-size: 9px !important;
+  }
+
+  .mu-slot-compact {
+    width: 30px !important;
+    height: 30px !important;
+    border-width: 1.5px !important;
+  }
+
+  .mu-slot-icon-compact {
+    width: 20px !important;
+    height: 20px !important;
+  }
+
+  .mu-util-compact {
+    width: 28px !important;
+    height: 28px !important;
+    border-width: 1.5px !important;
+  }
+
+  .mu-util-icon-compact {
+    width: 14px !important;
+    height: 14px !important;
+  }
+
+  .mu-ag-vial-compact {
+    width: 11px !important;
+    height: 36px !important;
+    border-width: 1.5px !important;
+  }
+
+  .mu-ag-label-compact {
+    font-size: 8.5px !important;
+  }
+
+  /* Title Screen Compact Landscape */
+  .mu-title-container-compact {
+    padding: 8px max(12px, env(safe-area-inset-right)) 6px max(12px, env(safe-area-inset-left)) !important;
+    justify-content: center !important;
+  }
+
+  .mu-title-crest-compact {
+    margin-bottom: 6px !important;
+    gap: 10px !important;
+  }
+
+  .mu-title-crest-compact svg {
+    width: 40px !important;
+    height: 40px !important;
+  }
+
+  .mu-title-crest-compact h1 {
+    font-size: 1.25rem !important;
+    line-height: 1.1 !important;
+  }
+
+  .mu-title-subtitle-compact {
+    display: none !important;
+  }
+
+  .mu-title-cards-compact {
+    margin-bottom: 6px !important;
+    gap: 6px !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  .mu-title-card-compact {
+    min-height: 0 !important;
+    padding: 6px 8px !important;
+  }
+
+  .mu-title-card-lore-compact {
+    display: none !important;
+  }
+
+  .mu-title-preview-compact {
+    margin-bottom: 6px !important;
+    padding: 6px 10px !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 10px !important;
+  }
+
+  .mu-title-preview-compact canvas {
+    width: 68px !important;
+    height: 68px !important;
+  }
+
+  .mu-title-cta-compact {
+    min-height: 38px !important;
+    padding: 6px 20px !important;
+    font-size: 0.875rem !important;
+  }
+
+  .mu-title-footer-compact {
+    display: none !important;
+  }
+}
+

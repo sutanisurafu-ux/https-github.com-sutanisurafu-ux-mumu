@@ -44,7 +44,7 @@ export const SERVER_CONFIG = {
   groundLootTtlMs: 60_000,
 
   /** Интервал автосохранения персонажа в SQLite БД с клиента (мс) */
-  characterAutoSaveDebounceMs: 2500,
+  characterAutoSaveDebounceMs: 600,
 
   /** Максимум сообщений в истории чата комнаты */
   maxChatHistoryPerRoom: 50,

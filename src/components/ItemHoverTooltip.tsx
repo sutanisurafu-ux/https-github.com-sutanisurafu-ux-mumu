@@ -25,6 +25,7 @@ export type HoverTooltipTarget =
       context: 'inventory' | 'equipped' | 'shop';
       requiredLevel?: number;
       priceZen?: number;
+      canQuickSell?: boolean;
     }
   | {
       kind: 'skill_book';
@@ -223,12 +224,31 @@ export const ItemHoverTooltip: React.FC<{
             </span>
           </div>
 
-          <div className="text-[10px] italic text-amber-200/85">
-            {target.context === 'shop'
-              ? 'Перетащите вещь мышкой в сетку Инвентаря [V] справа, чтобы купить!'
-              : target.context === 'inventory'
-                ? 'Двойной клик / ПКМ или перетащите на куклу — надеть'
-                : 'Двойной клик / ПКМ или перетащите в сумку — снять'}
+          <div className="flex flex-col gap-0.5 text-[10px]">
+            {target.context === 'shop' ? (
+              <span className="italic text-amber-200/85">
+                Перетащите вещь мышкой в сетку Инвентаря [V] справа, чтобы купить!
+              </span>
+            ) : target.context === 'inventory' ? (
+              <>
+                {target.canQuickSell ? (
+                  <span className="font-semibold text-emerald-300">
+                    💰 Ctrl + ЛКМ (или перетащите в Лавку) — продать за +{target.item.valueZen} Zen
+                  </span>
+                ) : (
+                  <span className="text-[#bfb5a4]">
+                    🏪 У Лавки Ханзо: Ctrl + ЛКМ — быстрая продажа за +{target.item.valueZen} Zen
+                  </span>
+                )}
+                <span className="italic text-amber-200/85">
+                  Двойной клик / ПКМ — надеть · За окно — выбросить на землю
+                </span>
+              </>
+            ) : (
+              <span className="italic text-amber-200/85">
+                Двойной клик / ПКМ или перетащите в сумку — снять
+              </span>
+            )}
           </div>
         </div>
       )}

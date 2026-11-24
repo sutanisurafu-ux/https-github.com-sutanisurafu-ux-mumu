@@ -12,10 +12,12 @@ import {
   Compass,
   Clock,
   Shield,
+  Maximize2,
 } from 'lucide-react';
 import { TERRITORIES, getClassDisplayTitle } from '../game/rules';
 import { getWorldGameTimeSec } from '../game/party';
 import { getNextGoldenBossSpawnSec } from '../game/worldMonsters';
+import { requestMobileLandscapeFullscreen } from '../utils/mobileOrientation';
 import {
   BloodCastleStage,
   PartyChatMessage,
@@ -175,22 +177,22 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
       />
 
       {/* TOP PERIMETER: Classic MU Uncluttered Top-Left Chat + Center Boss/BC + Top-Right Minimap */}
-      <div className="flex items-start justify-between gap-2 p-2.5 sm:p-3">
+      <div className="mu-top-hud-compact flex items-start justify-between gap-2 p-2.5 sm:p-3">
         {/* TOP-LEFT: Classic MU Floating Zone Chat + Compact Hero & Party Strip */}
-        <div className="pointer-events-auto flex flex-col gap-1.5 max-w-[330px] sm:max-w-[390px]">
+        <div className="mu-top-left-compact pointer-events-auto flex flex-col gap-1 min-w-0 max-w-[240px] sm:max-w-[390px]">
           {/* Slim Classic MU Character Summary Strip */}
-          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 bg-[#0b090c]/80 backdrop-blur-sm border border-[#6e5a3e]/50 px-2.5 py-1 text-[11px] shadow-md">
-            <span className="font-serif font-bold text-[#f3d48c] tracking-wide truncate max-w-[140px]">
+          <div className="mu-top-strip-compact flex flex-wrap items-center gap-x-2 gap-y-0.5 bg-[#0b090c]/80 backdrop-blur-sm border border-[#6e5a3e]/50 px-2.5 py-1 text-[11px] shadow-md">
+            <span className="font-serif font-bold text-[#f3d48c] tracking-wide truncate max-w-[92px] sm:max-w-[140px]">
               {classTitle}
             </span>
-            <span className="font-mono font-bold text-amber-300">
+            <span className="font-mono font-bold text-amber-300 shrink-0">
               Lv.{player.level}
               {player.resets > 0 ? ` · R${player.resets}` : ''}
             </span>
-            <span className="font-mono text-amber-200/90">
+            <span className="font-mono text-amber-200/90 shrink-0">
               {player.zen.toLocaleString()} Zen
             </span>
-            <span className="hidden sm:inline font-mono text-[10px] text-slate-300/85">
+            <span className="mu-top-hide-short hidden sm:inline font-mono text-[10px] text-slate-300/85">
               B:{player.jewels.bless} S:{player.jewels.soul} L:{player.jewels.life} C:{player.jewels.chaos}
             </span>
           </div>
@@ -200,7 +202,7 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
             {visibleChatMessages.length > 0 && (
               <div
                 data-testid="zone-chat-log"
-                className="flex flex-col gap-0.5 bg-black/52 border-l-2 border-[#a8874e]/75 px-2 py-1 text-[11px] leading-snug shadow"
+                className="mu-chat-compact flex flex-col gap-0.5 bg-black/52 border-l-2 border-[#a8874e]/75 px-2 py-1 text-[11px] leading-snug shadow"
               >
                 {visibleChatMessages.map((msg) => (
                   <div key={msg.id} className="break-words drop-shadow-[0_1px_1px_rgba(0,0,0,0.95)]">
@@ -269,17 +271,17 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
 
           {/* Compact Online Party Allies Strip (only when in an active room) */}
           {partyRoomCode && partyMembers.length > 0 && (
-            <div className="bg-[#081316]/84 backdrop-blur-sm border border-teal-500/45 px-2 py-1.5 text-[10px] shadow-md max-w-[260px]">
+            <div className="mu-party-compact bg-[#081316]/84 backdrop-blur-sm border border-teal-500/45 px-2 py-1.5 text-[10px] shadow-md max-w-[260px]">
               <div className="flex items-center justify-between gap-2 mb-1">
                 <button
                   type="button"
                   onClick={onOpenPartyModal}
-                  className="flex items-center gap-1 font-bold text-teal-300 hover:text-teal-200 cursor-pointer"
+                  className="flex items-center gap-1 font-bold text-teal-300 hover:text-teal-200 cursor-pointer truncate"
                 >
-                  <Users className="w-3 h-3" />
-                  <span>Группа {partyRoomCode} ({partyMembers.length}/5)</span>
+                  <Users className="w-3 h-3 shrink-0" />
+                  <span className="truncate">Группа {partyRoomCode} ({partyMembers.length}/5)</span>
                 </button>
-                <span className="text-[9px] font-mono text-teal-300/80">
+                <span className="text-[9px] font-mono text-teal-300/80 shrink-0">
                   {partyConnected ? 'ONLINE' : '...'}
                 </span>
               </div>
@@ -303,7 +305,8 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
                             {member.nickname}
                           </span>
                           <span className="font-mono text-[9px] text-teal-200/80 shrink-0">
-                            Ур.{member.level} · {memberZone}
+                            Ур.{member.level}
+                            <span className="mu-top-hide-short"> · {memberZone}</span>
                           </span>
                         </div>
                         <div className="h-1 bg-slate-900 overflow-hidden mt-0.5">
@@ -342,16 +345,16 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
         </div>
 
         {/* TOP-CENTER: Boss HP Bar or Blood Castle 3-Minute Event Tracker */}
-        <div className="flex flex-col items-center gap-1.5 flex-1 max-w-[360px]">
+        <div className="mu-top-center-compact flex flex-col items-center gap-1 min-w-0 flex-1 max-w-[340px]">
           {bloodCastleInfo?.active && (
-            <div className="pointer-events-auto w-full bg-[#1a0a12]/92 backdrop-blur-md border border-rose-500/70 px-3 py-1.5 shadow-[0_0_20px_rgba(244,63,94,0.3)]">
+            <div className="mu-boss-card-compact pointer-events-auto w-full bg-[#1a0a12]/92 backdrop-blur-md border border-rose-500/70 px-3 py-1.5 shadow-[0_0_20px_rgba(244,63,94,0.3)]">
               <div className="flex items-center justify-between gap-2 text-[11px]">
-                <span className="font-serif font-bold text-rose-200 uppercase tracking-wider">
+                <span className="font-serif font-bold text-rose-200 uppercase tracking-wider truncate">
                   Blood Castle
                 </span>
                 <span
                   data-testid="blood-castle-timer"
-                  className={`font-mono font-bold px-1.5 py-0.5 border ${
+                  className={`font-mono font-bold px-1.5 py-0.5 border shrink-0 ${
                     bcLowTime
                       ? 'bg-rose-600/40 border-rose-400 text-rose-100 animate-pulse'
                       : 'bg-black/60 border-rose-500/50 text-amber-200'
@@ -362,7 +365,7 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
                 <button
                   type="button"
                   onClick={onExitBloodCastle}
-                  className="px-1.5 py-0.5 bg-rose-950 hover:bg-rose-800 border border-rose-400/50 text-[10px] font-bold text-rose-200 cursor-pointer"
+                  className="px-1.5 py-0.5 bg-rose-950 hover:bg-rose-800 border border-rose-400/50 text-[10px] font-bold text-rose-200 cursor-pointer shrink-0"
                 >
                   Выход
                 </button>
@@ -387,15 +390,15 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
           )}
 
           {bossActiveName && !bloodCastleInfo?.active && (
-            <div className="w-full bg-[#1a1306]/92 border border-amber-400/80 px-3 py-1.5 shadow-[0_0_22px_rgba(250,204,21,0.3)]">
-              <div className="flex items-center justify-between text-[11px] font-serif font-bold text-yellow-200 mb-1">
-                <span className="flex items-center gap-1.5 truncate">
-                  <Shield className="w-3.5 h-3.5 text-yellow-400 shrink-0" />
-                  {bossActiveName}
+            <div className="mu-boss-card-compact w-full bg-[#1a1306]/92 border border-amber-400/80 px-3 py-1.5 shadow-[0_0_22px_rgba(250,204,21,0.3)]">
+              <div className="flex items-center justify-between gap-1 text-[11px] font-serif font-bold text-yellow-200 mb-1">
+                <span className="flex items-center gap-1 min-w-0 truncate">
+                  <Shield className="w-3 h-3 text-yellow-400 shrink-0" />
+                  <span className="truncate">{bossActiveName}</span>
                 </span>
-                <span className="font-mono text-amber-300">{Math.round(bossHpPct * 100)}%</span>
+                <span className="font-mono text-amber-300 shrink-0">{Math.round(bossHpPct * 100)}%</span>
               </div>
-              <div className="h-2 bg-black/75 border border-amber-700/80 overflow-hidden">
+              <div className="h-1.5 sm:h-2 bg-black/75 border border-amber-700/80 overflow-hidden">
                 <div
                   className="h-full bg-gradient-to-r from-amber-600 via-yellow-400 to-amber-100 transition-all duration-150"
                   style={{ width: `${Math.max(0, Math.min(100, bossHpPct * 100))}%` }}
@@ -406,27 +409,36 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
         </div>
 
         {/* TOP-RIGHT: Classic MU Territory Header, World Server Clock, Minimap & System Controls */}
-        <div className="pointer-events-auto flex flex-col items-end gap-1.5">
-          <div className="flex items-center gap-1 bg-[#0b090c]/85 backdrop-blur-sm border border-[#6e5a3e]/55 px-2 py-1 shadow-md">
+        <div className="pointer-events-auto flex flex-col items-end gap-1 shrink-0">
+          <div className="mu-top-strip-compact flex items-center gap-1 bg-[#0b090c]/85 backdrop-blur-sm border border-[#6e5a3e]/55 px-2 py-1 shadow-md">
             <button
               type="button"
               onClick={onOpenTerritory}
-              className="flex items-center gap-1.5 text-left pr-1.5 border-r border-white/15 hover:text-amber-300 transition-colors cursor-pointer"
+              className="flex items-center gap-1 text-left pr-1.5 border-r border-white/15 hover:text-amber-300 transition-colors cursor-pointer"
               title="Карта 24 континентов [T]"
             >
               <MapIcon className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span className="font-serif font-bold text-[11px] text-[#f3d48c] max-w-[115px] truncate">
+              <span className="mu-territory-name-compact font-serif font-bold text-[11px] text-[#f3d48c] max-w-[90px] sm:max-w-[115px] truncate">
                 {player.inBloodCastle ? 'Blood Castle' : territory.name}
               </span>
             </button>
             <div
               data-testid="world-game-time-clock"
-              className="flex items-center gap-1 px-1.5 text-[11px] font-mono font-bold text-amber-200"
+              className="flex items-center gap-1 px-1 text-[10px] sm:text-[11px] font-mono font-bold text-amber-200"
               title="Серверное игровое время респауна"
             >
               <Clock className="w-3 h-3 text-amber-400" />
               <span>{worldClock}</span>
             </div>
+            <button
+              type="button"
+              onClick={() => void requestMobileLandscapeFullscreen()}
+              className="p-1 text-slate-300 hover:text-amber-300 cursor-pointer lg:hidden"
+              aria-label="Полный экран (альбомный режим)"
+              title="Полный экран и альбомная ориентация"
+            >
+              <Maximize2 className="w-3.5 h-3.5" />
+            </button>
             <button
               type="button"
               onClick={onToggleMute}
@@ -457,7 +469,7 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
           </div>
 
           {/* Compact Corner Minimap */}
-          <div className="hidden sm:block bg-[#0b090c]/88 border border-[#6e5a3e]/65 p-1 shadow-lg">
+          <div className="mu-minimap-compact hidden sm:block bg-[#0b090c]/88 border border-[#6e5a3e]/65 p-1 shadow-lg">
             <canvas
               ref={hudRefs.minimapCanvasRef}
               width={96}
@@ -470,7 +482,7 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
           {!player.inBloodCastle && (
             <div
               data-testid="golden-boss-status"
-              className={`bg-[#0b090c]/88 backdrop-blur-sm border px-2 py-0.5 text-[10px] font-mono shadow ${
+              className={`mu-boss-pill-compact bg-[#0b090c]/88 backdrop-blur-sm border px-2 py-0.5 text-[10px] font-mono shadow ${
                 bossActiveName
                   ? 'border-yellow-400/80 text-yellow-200'
                   : 'border-[#6e5a3e]/55 text-amber-200/85'

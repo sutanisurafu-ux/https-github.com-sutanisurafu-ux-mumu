@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocket, WebSocketServer } from 'ws';
-import { GameDatabase } from './server/db.ts';
+import { GameDatabase, MAX_CHARACTERS_PER_ACCOUNT } from './server/db.ts';
 import {
   BLOOD_CASTLE_CONFIG,
   SERVER_CONFIG,
@@ -37,6 +37,7 @@ import {
 } from './src/game/party.ts';
 import {
   ServerMonsterUnit,
+  ServerSimPlayerTarget,
   applyServerMonsterDamage,
   createInitialZoneMonsterMap,
   createTerritoryBossUnit,
@@ -44,6 +45,7 @@ import {
   extractDeadRespawnsRecord,
   getGoldenBossSlotIndex,
   reviveDueServerMonsters,
+  stepServerZoneMonsters,
   toSharedMonsterState,
 } from './src/game/worldMonsters.ts';
 import type {
@@ -69,6 +71,8 @@ interface ClientConnection {
   id: string;
   ws: WebSocket;
   roomCode: string;
+  accountId: string | null;
+  characterId: string | null;
   isAlive: boolean;
   msgCountWindow: number;
   windowResetAt: number;
@@ -430,10 +434,32 @@ function cleanupBloodCastleSnapshotIfEmpty(room: PartyRoom): void {
   }
 }
 
+function persistClientRuntimeVitals(client: ClientConnection, room: PartyRoom): void {
+  if (!client.accountId || !client.characterId) return;
+  const member = room.members.get(client.id);
+  if (!member) return;
+  try {
+    gameDb.updateCharacterRuntimeVitals({
+      characterId: client.characterId,
+      accountId: client.accountId,
+      territoryId: member.territoryId,
+      inBloodCastle: member.inBloodCastle,
+      posX: member.x,
+      posY: member.y,
+      currentHp: member.hp,
+      currentMp: member.mp,
+    });
+  } catch (err) {
+    console.error('[MU DB] Failed persisting runtime character vitals:', err);
+  }
+}
+
 function removeClientFromCurrentRoom(client: ClientConnection): void {
   if (!client.roomCode) return;
   const room = rooms.get(client.roomCode);
   if (!room) return;
+
+  persistClientRuntimeVitals(client, room);
 
   const departingMember = room.members.get(client.id);
   cancelTradesForMember(
@@ -460,6 +486,86 @@ function removeClientFromCurrentRoom(client: ClientConnection): void {
     }
     rooms.delete(room.code);
   }
+}
+
+const SESSION_COOKIE_NAME = 'mu_session';
+
+function parseCookies(cookieHeader: string | undefined): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!cookieHeader) return result;
+  const parts = cookieHeader.split(';');
+  for (const part of parts) {
+    const eqIdx = part.indexOf('=');
+    if (eqIdx <= 0) continue;
+    const key = part.slice(0, eqIdx).trim();
+    const val = part.slice(eqIdx + 1).trim();
+    if (!key) continue;
+    try {
+      result[key] = decodeURIComponent(val);
+    } catch {
+      result[key] = val;
+    }
+  }
+  return result;
+}
+
+function isRequestHttps(req: express.Request): boolean {
+  const proto = req.headers['x-forwarded-proto'];
+  if (typeof proto === 'string' && proto.split(',')[0].trim().toLowerCase() === 'https') {
+    return true;
+  }
+  return Boolean(req.secure);
+}
+
+function setSessionCookie(req: express.Request, res: express.Response, sessionToken: string): void {
+  const maxAgeSec = 60 * 60 * 24 * 365; // 1 year persistent session
+  const parts = [
+    `${SESSION_COOKIE_NAME}=${encodeURIComponent(sessionToken)}`,
+    'HttpOnly',
+    'Path=/',
+    `Max-Age=${maxAgeSec}`,
+  ];
+  if (isRequestHttps(req)) {
+    parts.push('Secure', 'SameSite=None', 'Partitioned');
+  } else {
+    parts.push('SameSite=Lax');
+  }
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+function resolveExistingAccountId(req: http.IncomingMessage): string | null {
+  const cookies = parseCookies(req.headers.cookie);
+  const rawToken = cookies[SESSION_COOKIE_NAME];
+  if (!rawToken) return null;
+  return gameDb.getAccountIdBySessionToken(rawToken);
+}
+
+function resolveOrCreateAccount(req: express.Request, res: express.Response): string {
+  const existing = resolveExistingAccountId(req);
+  if (existing) return existing;
+  const created = gameDb.createAccount();
+  setSessionCookie(req, res, created.sessionToken);
+  return created.accountId;
+}
+
+function verifyMutationOriginOrHeader(req: express.Request): boolean {
+  const xrw = req.headers['x-requested-with'];
+  if (typeof xrw === 'string' && xrw.toLowerCase() === 'xmlhttprequest') {
+    return true;
+  }
+  const origin = req.headers.origin;
+  const host = (req.headers['x-forwarded-host'] ?? req.headers.host ?? '').toString().split(',')[0].trim().toLowerCase();
+  if (typeof origin === 'string' && host) {
+    try {
+      const parsed = new URL(origin);
+      if (parsed.host.toLowerCase() === host) {
+        return true;
+      }
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 function extractBearerToken(req: express.Request): string {
@@ -496,6 +602,143 @@ async function startServer() {
       engine: 'sqlite',
       stats: gameDb.getStats(),
     });
+  });
+
+  // Account session bootstrap & list of saved characters (0..3 slots)
+  app.get('/api/account/me', (req, res) => {
+    const accountId = resolveOrCreateAccount(req, res);
+    res.json({
+      ok: true,
+      accountId,
+      maxSlots: MAX_CHARACTERS_PER_ACCOUNT,
+      characters: gameDb.listAccountCharacters(accountId),
+    });
+  });
+
+  // Live check whether a character name is unique across the entire server
+  app.get('/api/characters/check-name', (req, res) => {
+    const rawName = typeof req.query.name === 'string' ? req.query.name : '';
+    const check = gameDb.isNicknameAvailable(rawName);
+    res.json({
+      ok: true,
+      ...check,
+    });
+  });
+
+  // Create a new character in the player's account (max 3 slots, server-wide unique name)
+  app.post('/api/account/characters', (req, res) => {
+    if (!verifyMutationOriginOrHeader(req)) {
+      res.status(403).json({ ok: false, error: 'Недопустимый источник запроса.' });
+      return;
+    }
+    const accountId = resolveOrCreateAccount(req, res);
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<
+      string,
+      unknown
+    >;
+    const result = gameDb.createCharacterForAccount({
+      accountId,
+      nickname: body.nickname,
+      classId: body.classId,
+    });
+    if (result.status !== 'ok') {
+      const httpCode = result.status === 'name_taken' || result.status === 'limit_reached' ? 409 : 400;
+      res.status(httpCode).json({
+        ok: false,
+        code: result.status,
+        error: result.error,
+      });
+      return;
+    }
+    res.status(201).json({
+      ok: true,
+      character: result.record,
+    });
+  });
+
+  // Fetch full saved character state (including server coordinates & HP/MP) owned by current account
+  app.get('/api/account/characters/:id', (req, res) => {
+    const accountId = resolveExistingAccountId(req);
+    if (!accountId) {
+      res.status(401).json({ ok: false, error: 'Сессия аккаунта не найдена.' });
+      return;
+    }
+    const result = gameDb.getCharacterForAccount(req.params.id, accountId);
+    if (result.status !== 'ok') {
+      if (result.status === 'not_found') {
+        res.status(404).json({ ok: false, error: 'Персонаж не найден.' });
+        return;
+      }
+      res.status(403).json({ ok: false, error: 'Нет доступа к этому персонажу.' });
+      return;
+    }
+    res.json({ ok: true, character: result.record });
+  });
+
+  // Save full character progress, items, HP/MP & world coordinates for current account
+  app.put('/api/account/characters/:id', (req, res) => {
+    if (!verifyMutationOriginOrHeader(req)) {
+      res.status(403).json({ ok: false, error: 'Недопустимый источник запроса.' });
+      return;
+    }
+    const accountId = resolveExistingAccountId(req);
+    if (!accountId) {
+      res.status(401).json({ ok: false, error: 'Сессия аккаунта не найдена.' });
+      return;
+    }
+    try {
+      const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<
+        string,
+        unknown
+      >;
+      const result = gameDb.updateCharacterForAccount({
+        characterId: req.params.id,
+        accountId,
+        player: body.player,
+        posX: typeof body.posX === 'number' ? body.posX : undefined,
+        posY: typeof body.posY === 'number' ? body.posY : undefined,
+        currentHp: typeof body.currentHp === 'number' ? body.currentHp : undefined,
+        currentMp: typeof body.currentMp === 'number' ? body.currentMp : undefined,
+      });
+      if (result.status !== 'ok') {
+        if (result.status === 'not_found') {
+          res.status(404).json({ ok: false, error: 'Персонаж не найден.' });
+          return;
+        }
+        res.status(403).json({ ok: false, error: 'Нет прав на сохранение этого персонажа.' });
+        return;
+      }
+      res.json({
+        ok: true,
+        characterId: result.record.id,
+        updatedAt: result.record.updatedAt,
+      });
+    } catch {
+      res.status(400).json({ ok: false, error: 'Ошибка сохранения прогресса персонажа.' });
+    }
+  });
+
+  // Delete a character owned by the current account to free one of the 3 slots
+  app.delete('/api/account/characters/:id', (req, res) => {
+    if (!verifyMutationOriginOrHeader(req)) {
+      res.status(403).json({ ok: false, error: 'Недопустимый источник запроса.' });
+      return;
+    }
+    const accountId = resolveExistingAccountId(req);
+    if (!accountId) {
+      res.status(401).json({ ok: false, error: 'Сессия аккаунта не найдена.' });
+      return;
+    }
+    const result = gameDb.deleteCharacterForAccount(req.params.id, accountId);
+    if (result !== 'ok') {
+      if (result === 'not_found') {
+        res.status(404).json({ ok: false, error: 'Персонаж не найден.' });
+        return;
+      }
+      res.status(403).json({ ok: false, error: 'Нет прав на удаление этого персонажа.' });
+      return;
+    }
+    res.json({ ok: true });
   });
 
   // Public character summaries / leaderboard
@@ -653,12 +896,15 @@ async function startServer() {
     maxPayload: SERVER_CONFIG.wsMaxPayloadBytes,
   });
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
     const clientId = `hero_${crypto.randomBytes(6).toString('hex')}`;
+    const accountId = resolveExistingAccountId(req);
     const client: ClientConnection = {
       id: clientId,
       ws,
       roomCode: '',
+      accountId,
+      characterId: null,
       isAlive: true,
       msgCountWindow: 0,
       windowResetAt: Date.now() + 1000,
@@ -690,7 +936,16 @@ async function startServer() {
 
       if (msg.type === 'party:join') {
         const requestedCode = sanitizePartyCode(msg.roomCode);
-        const nickname = sanitizePlayerNickname(msg.nickname, `Рыцарь-${clientId.slice(-3).toUpperCase()}`);
+        let nickname = sanitizePlayerNickname(msg.nickname, `Рыцарь-${clientId.slice(-3).toUpperCase()}`);
+
+        // Bind authenticated account character to this live WebSocket connection so HP & coords persist on server
+        if (typeof msg.characterId === 'string' && client.accountId) {
+          const ownedChar = gameDb.getCharacterForAccount(msg.characterId, client.accountId);
+          if (ownedChar.status === 'ok') {
+            client.characterId = ownedChar.record.id;
+            nickname = ownedChar.record.nickname;
+          }
+        }
 
         let targetCode = requestedCode;
         const candidateRoom = getOrCreateRoom(targetCode);
@@ -828,7 +1083,7 @@ async function startServer() {
 
       if (msg.type === 'party:sync') {
         const prevZoneKey = getPartyZoneKey(member.territoryId, member.inBloodCastle);
-        if (typeof msg.nickname === 'string') {
+        if (!client.characterId && typeof msg.nickname === 'string') {
           member.nickname = sanitizePlayerNickname(msg.nickname, member.nickname);
         }
         member.classId = sanitizeClassId(msg.classId ?? member.classId);
@@ -1035,53 +1290,8 @@ async function startServer() {
         const nowGameSec = getWorldGameTimeSec(now);
 
         if (!inBloodCastle) {
-          // For regular territories, the server is authoritative for HP, alive state, and individual respawn timers.
-          // The elected Zone Host only streams AI movement/positions for living monsters!
-          const zoneMap = getOrInitZoneWorldMonsters(room, territoryId, nowGameSec);
-          const incomingMoves = sanitizeSharedMonsterList(msg.monsters);
-          for (const sm of incomingMoves) {
-            const unit = zoneMap.get(sm.id);
-            if (!unit || !unit.alive) continue;
-            unit.x = sm.x;
-            unit.y = sm.y;
-            unit.aiState = sm.aiState === 'ko' ? 'move' : sm.aiState;
-            unit.telegraphX = sm.telegraphX;
-            unit.telegraphY = sm.telegraphY;
-            unit.facingAngle = sm.facingAngle;
-            unit.walkDistance = sm.walkDistance;
-            unit.chillTimer = sm.chillTimer;
-            unit.orbitDirection = sm.orbitDirection;
-          }
-
-          const { monsters, deadRespawns } = getLivingSharedMonstersForZone(
-            room,
-            territoryId,
-            nowGameSec
-          );
-          const snapshot: PartyZoneMonsterSnapshot = {
-            hostId: clientId,
-            territoryId,
-            inBloodCastle: false,
-            bossSpawnedForTerritory: Boolean(zoneMap.get(`boss_${territoryId}`)?.alive),
-            bcStage: 'kill_100',
-            bcBridgeKills: 0,
-            monsters,
-            deadMonsterRespawns: deadRespawns,
-            timestamp: now,
-          };
-
-          room.zoneSnapshots.set(zoneKey, snapshot);
-
-          broadcastToSameZone(
-            room,
-            territoryId,
-            false,
-            {
-              type: 'party:zone_monsters',
-              snapshot,
-            },
-            clientId
-          );
+          // Regular world territories are 100% server-authoritative (simulated directly on the server tick),
+          // so client tabs minimizing or pausing NEVER freeze monsters for other players!
           return;
         }
 
@@ -1536,25 +1746,98 @@ async function startServer() {
     });
   });
 
-  // Continuous 2Hz Server-Time Individual Monster Respawn Ticker (checks all active territories)
+  // Continuous 10Hz Server-Authoritative World Monster AI & Movement Loop
+  // Monsters live, patrol, roam (Golden Bosses), aggro, and attack relative to the SERVER,
+  // completely independent of any player minimizing or backgrounding their browser tab!
+  let lastWorldSimMs = Date.now();
+  const worldSimInterval = setInterval(() => {
+    const nowMs = Date.now();
+    const dtSec = Math.min(0.25, Math.max(0.016, (nowMs - lastWorldSimMs) / 1000));
+    lastWorldSimMs = nowMs;
+    const nowGameSec = getWorldGameTimeSec(nowMs);
+
+    for (const room of rooms.values()) {
+      const territoriesToStep = new Set<TerritoryId>(room.zoneWorldMonsters.keys());
+      const playersByTerritory = new Map<TerritoryId, ServerSimPlayerTarget[]>();
+
+      for (const m of room.members.values()) {
+        if (m.inBloodCastle) continue;
+        territoriesToStep.add(m.territoryId);
+        let list = playersByTerritory.get(m.territoryId);
+        if (!list) {
+          list = [];
+          playersByTerritory.set(m.territoryId, list);
+        }
+        list.push({ id: m.id, x: m.x, y: m.y, hp: m.hp });
+      }
+
+      for (const territoryId of territoriesToStep) {
+        const zoneMap = getOrInitZoneWorldMonsters(room, territoryId, nowGameSec, nowMs);
+        const playersInZone = playersByTerritory.get(territoryId) ?? [];
+        const attacks = stepServerZoneMonsters(
+          zoneMap,
+          territoryId,
+          playersInZone,
+          dtSec,
+          nowMs
+        );
+
+        if (playersInZone.length === 0) continue;
+
+        for (const attackEvent of attacks) {
+          broadcastToSameZone(room, territoryId, false, {
+            type: 'party:monster_attack',
+            event: attackEvent,
+          });
+        }
+
+        const monsters: SharedMonsterState[] = [];
+        for (const unit of zoneMap.values()) {
+          if (unit.alive && unit.hp > 0) {
+            monsters.push(toSharedMonsterState(unit));
+          }
+        }
+        const deadRespawns = extractDeadRespawnsRecord(zoneMap, nowGameSec);
+        const zoneKey = getPartyZoneKey(territoryId, false);
+        const snapshot: PartyZoneMonsterSnapshot = {
+          hostId: 'server',
+          territoryId,
+          inBloodCastle: false,
+          bossSpawnedForTerritory: Boolean(zoneMap.get(`boss_${territoryId}`)?.alive),
+          bcStage: 'kill_100',
+          bcBridgeKills: 0,
+          monsters,
+          deadMonsterRespawns: deadRespawns,
+          timestamp: nowMs,
+        };
+        room.zoneSnapshots.set(zoneKey, snapshot);
+
+        broadcastToSameZone(room, territoryId, false, {
+          type: 'party:zone_monsters',
+          snapshot,
+        });
+      }
+    }
+  }, 100);
+
+  // Continuous 2Hz Server-Time Individual Monster Respawn Ticker (checks all initialized & active territories)
   const respawnInterval = setInterval(() => {
     const nowMs = Date.now();
     const nowGameSec = getWorldGameTimeSec(nowMs);
     for (const room of rooms.values()) {
-      if (room.members.size === 0) continue;
-      const activeTerritories = new Set<TerritoryId>();
+      const territoriesToCheck = new Set<TerritoryId>(room.zoneWorldMonsters.keys());
       for (const m of room.members.values()) {
         if (!m.inBloodCastle) {
-          activeTerritories.add(m.territoryId);
+          territoriesToCheck.add(m.territoryId);
         }
       }
-      for (const territoryId of activeTerritories) {
+      for (const territoryId of territoriesToCheck) {
         reviveAndBroadcastDueZoneMonsters(room, territoryId, nowMs, nowGameSec);
       }
     }
   }, SERVER_CONFIG.worldRespawnTickMs);
 
-  // Periodic WebSocket heartbeat, stale member cleanup & ground loot expiration
+  // Periodic WebSocket heartbeat, stale member cleanup, ground loot expiration & live character vitals checkpoint
   const heartbeatInterval = setInterval(() => {
     const now = Date.now();
     for (const room of rooms.values()) {
@@ -1562,6 +1845,7 @@ async function startServer() {
         getZoneActiveGroundLoot(room, zoneKey, now);
       }
       for (const conn of room.connections.values()) {
+        persistClientRuntimeVitals(conn, room);
         if (!conn.isAlive) {
           conn.ws.terminate();
           removeClientFromCurrentRoom(conn);
@@ -1574,8 +1858,14 @@ async function startServer() {
   }, SERVER_CONFIG.wsHeartbeatIntervalMs);
 
   wss.on('close', () => {
+    clearInterval(worldSimInterval);
     clearInterval(respawnInterval);
     clearInterval(heartbeatInterval);
+    for (const room of rooms.values()) {
+      for (const conn of room.connections.values()) {
+        persistClientRuntimeVitals(conn, room);
+      }
+    }
     flushDirtyWorldStatesToDb();
   });
 
@@ -1610,9 +1900,15 @@ async function startServer() {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[MU Party Server] Received ${signal}, flushing SQLite & shutting down...`);
+    clearInterval(worldSimInterval);
     clearInterval(respawnInterval);
     clearInterval(heartbeatInterval);
     try {
+      for (const room of rooms.values()) {
+        for (const conn of room.connections.values()) {
+          persistClientRuntimeVitals(conn, room);
+        }
+      }
       flushDirtyWorldStatesToDb();
       gameDb.close();
     } catch (err) {

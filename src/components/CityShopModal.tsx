@@ -134,7 +134,7 @@ export const CityShopModal: React.FC<CityShopModalProps> = ({
 }) => {
   const [hoverTooltip, setHoverTooltip] = useState<HoverTooltipState | null>(null);
   const [shopNotice, setShopNotice] = useState<string>(
-    'Перетащите вещь, книгу скила или банки мышкой в сетку Инвентаря [V] справа, чтобы купить!'
+    'Покупка: перетащите товар в Инвентарь [V]. Продажа: Ctrl + ЛКМ по вещи в инвентаре или перетащите её в это окно!'
   );
 
   const cls = CLASSES[player.classId];
@@ -153,6 +153,7 @@ export const CityShopModal: React.FC<CityShopModalProps> = ({
 
   const handleDropToSell = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     let payload: CrossModalDragPayload | null = activeDragPayload;
     if (!payload) {
       try {
@@ -166,7 +167,7 @@ export const CityShopModal: React.FC<CityShopModalProps> = ({
       const item = player.inventory.find((i) => i.id === payload.itemId);
       if (item) {
         onSellInventoryItem(item);
-        setShopNotice(`Продано торговцу Ханзо: ${item.name} за +${item.valueZen} Zen!`);
+        setShopNotice(`💰 Продано торговцу Ханзо: ${item.name} за +${item.valueZen} Zen!`);
       }
     }
     onSetDragPayload(null);
@@ -232,8 +233,12 @@ export const CityShopModal: React.FC<CityShopModalProps> = ({
   return (
     <>
       <div
-        onDragOver={(e) => e.preventDefault()}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
         onDrop={handleDropToSell}
+        data-testid="city-shop-modal"
         className="pointer-events-auto fixed left-2.5 top-16 z-40 flex max-h-[82vh] w-[calc(100vw-20px)] max-w-[465px] flex-col overflow-hidden rounded-2xl border-2 border-amber-500/50 bg-[#110e19]/96 shadow-[0_16px_48px_rgba(0,0,0,0.94)] sm:left-5 sm:top-20"
         role="dialog"
         aria-modal="false"
@@ -508,8 +513,8 @@ export const CityShopModal: React.FC<CityShopModalProps> = ({
           </div>
 
           {/* 4. SELL DROP ZONE */}
-          <div className="rounded-xl border border-dashed border-amber-500/35 bg-[#14101d] px-3 py-2 text-center text-[11px] text-[#bfb5a4]">
-            💰 Перетащите ненужную экипировку из сетки Инвентаря [V] в это окно Магазина, чтобы продать её за Zen
+          <div className="rounded-xl border border-dashed border-amber-500/45 bg-[#14101d] px-3 py-2 text-center text-[11px] text-amber-200/90">
+            💰 Продажа: зажмите <strong className="text-amber-300">Ctrl + ЛКМ</strong> по вещи в Инвентаре [V] или перетащите её в это окно Магазина
           </div>
         </div>
       </div>

@@ -1306,11 +1306,209 @@ test('EXP bar tens-digit (0..9), halved EXP/Zen rates (0.5x), 72 unique non-repe
   });
 });
 
+test('Server-authoritative monsters patrol, roam, aggro, and attack independently of client tabs; mobile orientation helpers classify viewports accurately', async () => {
+  const {
+    createInitialZoneMonsterMap,
+    createTerritoryBossUnit,
+    stepServerZoneMonsters,
+  } = await import('./worldMonsters');
+  const { isMobilePortraitViewport, isCompactLandscapeViewport } = await import(
+    '../utils/mobileOrientation'
+  );
 
+  // 1. Server-authoritative monsters move even with 0 players in the zone (so minimizing a player tab never freezes monsters)
+  const zoneMap = createInitialZoneMonsterMap('lorencia', 0);
+  const boss = createTerritoryBossUnit('lorencia', () => 0.42);
+  zoneMap.set(boss.id, boss);
 
+  const trackedRegular = Array.from(zoneMap.values()).find((u) => !u.isBoss)!;
+  const startRegX = trackedRegular.x;
+  const startRegY = trackedRegular.y;
+  const startBossX = boss.x;
+  const startBossY = boss.y;
 
+  let nowMs = 1_000_000;
+  for (let i = 0; i < 20; i++) {
+    nowMs += 100;
+    stepServerZoneMonsters(zoneMap, 'lorencia', [], 0.1, nowMs, () => 0.35);
+  }
 
+  const regularMoved = Math.hypot(trackedRegular.x - startRegX, trackedRegular.y - startRegY);
+  const bossMoved = Math.hypot(boss.x - startBossX, boss.y - startBossY);
+  assert.ok(regularMoved > 5, `Regular monster should patrol on server with 0 players, moved ${regularMoved}`);
+  assert.ok(bossMoved > 10, `Golden Boss should roam wilderness on server with 0 players, moved ${bossMoved}`);
 
+  // 2. When Player A is AFK in Safe Town (0,0) and Player B stands near a monster outside town,
+  // the monster ignores Safe Town and aggros + chases + emits a server attack event against Player B!
+  const targetMonster = Array.from(zoneMap.values()).find(
+    (u) => !u.isBoss && Math.hypot(u.x, u.y) > 450
+  )!;
+  const playerA = { id: 'p_afk_town', x: 0, y: 0, hp: 500 }; // Safe town
+  const playerB = {
+    id: 'p_active_hunter',
+    x: targetMonster.x + 65,
+    y: targetMonster.y + 10,
+    hp: 500,
+  };
 
+  let attackEventsCount = 0;
+  for (let i = 0; i < 45; i++) {
+    nowMs += 100;
+    const events = stepServerZoneMonsters(
+      zoneMap,
+      'lorencia',
+      [playerA, playerB],
+      0.1,
+      nowMs,
+      () => 0.5
+    );
+    attackEventsCount += events.filter((ev) => ev.enemyId === targetMonster.id).length;
+  }
+  assert.ok(
+    attackEventsCount >= 1,
+    `Expected server-authoritative monster to emit at least 1 attack event toward active Player B, got ${attackEventsCount}`
+  );
 
+  // 3. Monsters must NEVER enter the Safe Town radius (< 335px)
+  for (const unit of zoneMap.values()) {
+    assert.ok(
+      Math.hypot(unit.x, unit.y) >= 330,
+      `Monster ${unit.id} crossed into Safe Town at dist ${Math.hypot(unit.x, unit.y)}`
+    );
+  }
 
+  // 4. Mobile portrait & compact landscape orientation classifiers
+  assert.equal(isMobilePortraitViewport(390, 844, true), true, 'Touch phone in portrait must trigger rotate guard');
+  assert.equal(isMobilePortraitViewport(390, 844, false), false, 'Desktop narrow window without touch must NOT trigger mobile rotate guard');
+  assert.equal(isMobilePortraitViewport(844, 390, true), false, 'Touch phone in landscape must NOT show rotate guard');
+  assert.equal(isCompactLandscapeViewport(844, 390), true, '844x390 phone landscape must activate compact landscape mode');
+  assert.equal(isCompactLandscapeViewport(667, 375), true, '667x375 small phone landscape must activate compact landscape mode');
+  assert.equal(isCompactLandscapeViewport(1440, 900), false, 'Desktop 1440x900 must stay in full desktop mode');
+});
+
+test('SQLite accounts start with 0 characters, enforce server-wide unique names & max 3 slots per account, and persist coordinates/HP/MP across reloads', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { GameDatabase, MAX_CHARACTERS_PER_ACCOUNT, validateUniqueCharacterName } = await import(
+    '../../server/db'
+  );
+
+  // 1. Character name validator rules
+  assert.equal(validateUniqueCharacterName('ab').valid, false, 'Names shorter than 3 chars must fail');
+  assert.equal(validateUniqueCharacterName('Bad<Name>').valid, false, 'Unsafe symbols must fail');
+  assert.equal(validateUniqueCharacterName('Артас_77').valid, true, 'Cyrillic + digits + underscore must pass');
+  assert.equal(validateUniqueCharacterName('DarkLord-99').valid, true, 'Latin + hyphen + digits must pass');
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mu-account-db-'));
+  const dbPath = path.join(tmpDir, 'test-accounts.sqlite');
+  const db = new GameDatabase(dbPath);
+
+  try {
+    assert.equal(MAX_CHARACTERS_PER_ACCOUNT, 3);
+
+    // 2. First-time visitor account starts with 0 characters
+    const acc1 = db.createAccount();
+    const acc2 = db.createAccount();
+    assert.equal(db.getAccountIdBySessionToken(acc1.sessionToken), acc1.accountId);
+    assert.equal(db.getAccountIdBySessionToken('invalid_token'), null);
+    assert.equal(db.listAccountCharacters(acc1.accountId).length, 0);
+
+    // 3. Create 1st character on Account 1
+    const c1 = db.createCharacterForAccount({
+      accountId: acc1.accountId,
+      nickname: 'DarkBlade',
+      classId: 'dark_knight',
+    });
+    assert.equal(c1.status, 'ok');
+    assert.equal(c1.record.nickname, 'DarkBlade');
+    assert.equal(c1.record.accountId, acc1.accountId);
+    assert.equal(c1.record.posX, 0);
+    assert.equal(c1.record.posY, 220);
+
+    // 4. Server-wide case-insensitive uniqueness check across OTHER accounts
+    assert.equal(db.isNicknameAvailable('darkblade').available, false);
+    const dupRes = db.createCharacterForAccount({
+      accountId: acc2.accountId,
+      nickname: 'darkblade',
+      classId: 'dark_wizard',
+    });
+    assert.equal(dupRes.status, 'name_taken');
+
+    // 5. Account 1 creates characters #2 and #3, and 4th is rejected (limit = 3)
+    const c2 = db.createCharacterForAccount({
+      accountId: acc1.accountId,
+      nickname: 'ВолшебникСвета',
+      classId: 'dark_wizard',
+    });
+    const c3 = db.createCharacterForAccount({
+      accountId: acc1.accountId,
+      nickname: 'FairyQueen',
+      classId: 'fairy_elf',
+    });
+    assert.equal(c2.status, 'ok');
+    assert.equal(c3.status, 'ok');
+    assert.equal(db.listAccountCharacters(acc1.accountId).length, 3);
+
+    const c4 = db.createCharacterForAccount({
+      accountId: acc1.accountId,
+      nickname: 'FourthHero',
+      classId: 'dark_knight',
+    });
+    assert.equal(c4.status, 'limit_reached');
+
+    // 6. Save full progress + server coordinates & HP/MP, then verify ownership & reload
+    const updatedPlayer = {
+      ...c1.record.player,
+      level: 28,
+      zen: 45_200,
+      territoryId: 'devias' as const,
+    };
+    const saveRes = db.updateCharacterForAccount({
+      characterId: c1.record.id,
+      accountId: acc1.accountId,
+      player: updatedPlayer,
+      posX: 640,
+      posY: -410,
+      currentHp: 215,
+      currentMp: 95,
+    });
+    assert.equal(saveRes.status, 'ok');
+
+    // Cross-account read/write/delete must be forbidden
+    assert.equal(db.getCharacterForAccount(c1.record.id, acc2.accountId).status, 'forbidden');
+    assert.equal(db.deleteCharacterForAccount(c1.record.id, acc2.accountId), 'forbidden');
+
+    // Server WebSocket runtime vitals checkpoint updates coords & HP/MP without losing gear/Zen
+    const vitalsOk = db.updateCharacterRuntimeVitals({
+      characterId: c1.record.id,
+      accountId: acc1.accountId,
+      territoryId: 'devias',
+      inBloodCastle: false,
+      posX: 725,
+      posY: -380,
+      currentHp: 180,
+      currentMp: 70,
+    });
+    assert.equal(vitalsOk, true);
+
+    const reloaded = db.getCharacterForAccount(c1.record.id, acc1.accountId);
+    assert.equal(reloaded.status, 'ok');
+    assert.equal(reloaded.record.player.level, 28);
+    assert.equal(reloaded.record.player.zen, 45_200);
+    assert.equal(reloaded.record.player.territoryId, 'devias');
+    assert.equal(reloaded.record.posX, 725);
+    assert.equal(reloaded.record.posY, -380);
+    assert.equal(reloaded.record.currentHp, 180);
+    assert.equal(reloaded.record.currentMp, 70);
+
+    // 7. Deleting a character frees the slot and releases the unique name
+    const delRes = db.deleteCharacterForAccount(c3.record.id, acc1.accountId);
+    assert.equal(delRes, 'ok');
+    assert.equal(db.listAccountCharacters(acc1.accountId).length, 2);
+    assert.equal(db.isNicknameAvailable('FairyQueen').available, true);
+  } finally {
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

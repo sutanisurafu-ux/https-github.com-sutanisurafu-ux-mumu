@@ -45,6 +45,7 @@ import {
 import {
   BLOOD_CASTLE_RESPAWN_DURATION_SEC,
   BLOOD_CASTLE_TIME_LIMIT_SEC,
+  ServerMonsterAttackEvent,
   ServerMonsterUnit,
   advanceBloodCastleTimer,
   buildBloodCastleBridgeUnits,
@@ -120,11 +121,21 @@ export interface GameEngineActions {
   applyServerMonsterHp: (event: ServerMonsterHpEvent) => void;
   applyServerMonsterKilled: (event: ServerMonsterKilledEvent) => void;
   applyServerMonsterRespawned: (event: ServerMonsterRespawnedEvent) => void;
+  applyServerMonsterAttack: (event: ServerMonsterAttackEvent) => void;
   dropEquipmentOnGround: (item: EquipmentItem) => LootDrop;
   syncServerGroundLoot: (drops: LootDrop[]) => void;
   addRemoteGroundLoot: (drop: LootDrop) => void;
   removeRemoteGroundLoot: (dropId: string, pickerNickname?: string) => void;
   setLocalChatBubble: (text: string) => void;
+  applyServerHeroVitals: (vitals: { x: number; y: number; hp: number; mp: number }) => void;
+  getHeroRuntimeVitals: () => {
+    x: number;
+    y: number;
+    hp: number;
+    maxHp: number;
+    mp: number;
+    maxMp: number;
+  };
 }
 
 interface GameCanvasProps {
@@ -711,13 +722,20 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     let bufferedSkillIdx: number | null = null;
     let pendingShopOpen = false;
 
+    const getCameraZoom = (): number => {
+      if (viewHeight <= 440) return 0.72;
+      if (viewHeight <= 540) return 0.84;
+      return 1.0;
+    };
+
     const screenToWorld = (clientX: number, clientY: number) => {
       canvasRect = canvas.getBoundingClientRect();
       const localX = clientX - canvasRect.left;
       const localY = clientY - canvasRect.top;
+      const zoom = getCameraZoom();
       return {
-        wx: cameraX + (localX - viewWidth / 2),
-        wy: cameraY + (localY - viewHeight / 2),
+        wx: cameraX + (localX - viewWidth / 2) / zoom,
+        wy: cameraY + (localY - viewHeight / 2) / zoom,
       };
     };
 
@@ -1850,6 +1868,52 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         );
         soundEngine.playTeleport();
       },
+      applyServerHeroVitals: (vitals: { x: number; y: number; hp: number; mp: number }) => {
+        const derived = getCachedDerivedStats(playerRef.current);
+        const clampedX = Math.max(
+          -ARENA_HALF_SIZE + 60,
+          Math.min(ARENA_HALF_SIZE - 60, Number.isFinite(vitals.x) ? vitals.x : 0)
+        );
+        const clampedY = Math.max(
+          -ARENA_HALF_SIZE + 60,
+          Math.min(ARENA_HALF_SIZE - 60, Number.isFinite(vitals.y) ? vitals.y : 220)
+        );
+        hero.moveTargetX = null;
+        hero.moveTargetY = null;
+        hero.vx = 0;
+        hero.vy = 0;
+        pendingShopOpen = false;
+
+        if (Number.isFinite(vitals.hp) && vitals.hp > 0) {
+          hero.x = clampedX;
+          hero.y = clampedY;
+          hero.hp = Math.max(1, Math.min(derived.maxHp, Math.round(vitals.hp)));
+          hero.ghostHp = hero.hp;
+        } else {
+          // Safely respawn in city if last saved HP was 0 (or fresh character with sentinel 0)
+          hero.x = clampedX;
+          hero.y = clampedY;
+          hero.hp = derived.maxHp;
+          hero.ghostHp = derived.maxHp;
+        }
+
+        if (Number.isFinite(vitals.mp) && vitals.mp > 0) {
+          hero.mp = Math.max(0, Math.min(derived.maxMp, Math.round(vitals.mp)));
+        } else {
+          hero.mp = derived.maxMp;
+        }
+      },
+      getHeroRuntimeVitals: () => {
+        const derived = getCachedDerivedStats(playerRef.current);
+        return {
+          x: Math.round(hero.x),
+          y: Math.round(hero.y),
+          hp: Math.max(0, Math.round(hero.hp)),
+          maxHp: derived.maxHp,
+          mp: Math.max(0, Math.round(hero.mp)),
+          maxMp: derived.maxMp,
+        };
+      },
       applyRemotePartyAttack: (attack: PartyAttackEvent) => {
         const pState = playerRef.current;
         if (attack.inBloodCastle !== Boolean(pState.inBloodCastle)) return;
@@ -2130,6 +2194,28 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             1.3
           );
           soundEngine.playGoldenBossInvasion();
+        }
+      },
+      applyServerMonsterAttack: (event: ServerMonsterAttackEvent) => {
+        const pState = playerRef.current;
+        if (pState.inBloodCastle || event.territoryId !== pState.territoryId) return;
+        if (hero.defeatBeatTimer > 0) return;
+        const heroInSafe = Math.hypot(hero.x, hero.y) <= TOWN_SAFE_RADIUS;
+        if (heroInSafe) return;
+
+        const dist = Math.hypot(hero.x - event.hitCenterX, hero.y - event.hitCenterY);
+        if (dist <= event.hitRadius) {
+          const derived = getCachedDerivedStats(pState);
+          const mitigated = Math.max(2, Math.round(event.attackDamage - derived.defense * 0.22));
+          hero.hp = Math.max(0, hero.hp - mitigated);
+          hero.hitFlashTimer = 0.08;
+          cameraTrauma = Math.min(1, cameraTrauma + 0.28);
+          spawnFloatingText(hero.x, hero.y - 24, `-${mitigated}`, '#f43f5e', 1.1);
+          spawnParticles(hero.x, hero.y, 10, '#f43f5e', 40, 130, 3.5, 0.35);
+          soundEngine.playPlayerHurt();
+          if (hero.hp <= 0 && hero.defeatBeatTimer <= 0) {
+            hero.defeatBeatTimer = 0.55;
+          }
         }
       },
       applyRemoteSharedKill: (kill: PartyKillShareEvent) => {
@@ -2914,42 +3000,52 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             continue;
           }
 
-          // If a friend is the Zone Host for this location, smoothly interpolate shared monster coordinates at 60Hz
-          if (!isZoneHost) {
+          const isServerDrivenWorld = !activeInBloodCastle && wsConnectedRef.current;
+
+          // Server-authoritative world monsters (or remote Blood Castle Zone Host): smoothly interpolate coordinates at 60Hz
+          if (!isZoneHost || isServerDrivenWorld) {
             const targetPos = sharedMonsterTargets.get(e.id);
             if (targetPos) {
               const lerpFactor = Math.min(1, simDt * 14);
+              const prevX = e.x;
+              const prevY = e.y;
               e.x += (targetPos.x - e.x) * lerpFactor;
               e.y += (targetPos.y - e.y) * lerpFactor;
+              const moved = Math.hypot(e.x - prevX, e.y - prevY);
+              if (moved > 0.15) {
+                e.walkDistance += moved;
+              }
             }
-            if (e.aiState === 'active') {
-              e.stateTimer -= simDt;
-              if (e.stateTimer > 0.12) {
-                e.stateTimer = 0.05; // Trigger local hit check once per remote attack swing
-                const hitCenterX = e.archetype === 'swarmer_skeleton' ? e.x : e.telegraphX;
-                const hitCenterY = e.archetype === 'swarmer_skeleton' ? e.y : e.telegraphY;
-                const hitRadius = e.isBoss ? 105 : e.archetype === 'kiter_lich' ? 68 : 62;
-                if (
-                  !heroInSafeTown &&
-                  Math.hypot(hero.x - hitCenterX, hero.y - hitCenterY) <= hitRadius
-                ) {
-                  const mitigated = Math.max(
-                    2,
-                    Math.round(e.attackDamage - derived.defense * 0.22)
-                  );
-                  hero.hp = Math.max(0, hero.hp - mitigated);
-                  hero.hitFlashTimer = 0.08;
-                  cameraTrauma = Math.min(1, cameraTrauma + 0.28);
-                  spawnFloatingText(hero.x, hero.y - 24, `-${mitigated}`, '#f43f5e', 1.1);
-                  spawnParticles(hero.x, hero.y, 10, '#f43f5e', 40, 130, 3.5, 0.35);
-                  soundEngine.playPlayerHurt();
-                  if (hero.hp <= 0 && hero.defeatBeatTimer <= 0) {
-                    hero.defeatBeatTimer = 0.55;
+            if (!isServerDrivenWorld) {
+              if (e.aiState === 'active') {
+                e.stateTimer -= simDt;
+                if (e.stateTimer > 0.12) {
+                  e.stateTimer = 0.05; // Trigger local hit check once per remote Blood Castle attack swing
+                  const hitCenterX = e.archetype === 'swarmer_skeleton' ? e.x : e.telegraphX;
+                  const hitCenterY = e.archetype === 'swarmer_skeleton' ? e.y : e.telegraphY;
+                  const hitRadius = e.isBoss ? 105 : e.archetype === 'kiter_lich' ? 68 : 62;
+                  if (
+                    !heroInSafeTown &&
+                    Math.hypot(hero.x - hitCenterX, hero.y - hitCenterY) <= hitRadius
+                  ) {
+                    const mitigated = Math.max(
+                      2,
+                      Math.round(e.attackDamage - derived.defense * 0.22)
+                    );
+                    hero.hp = Math.max(0, hero.hp - mitigated);
+                    hero.hitFlashTimer = 0.08;
+                    cameraTrauma = Math.min(1, cameraTrauma + 0.28);
+                    spawnFloatingText(hero.x, hero.y - 24, `-${mitigated}`, '#f43f5e', 1.1);
+                    spawnParticles(hero.x, hero.y, 10, '#f43f5e', 40, 130, 3.5, 0.35);
+                    soundEngine.playPlayerHurt();
+                    if (hero.hp <= 0 && hero.defeatBeatTimer <= 0) {
+                      hero.defeatBeatTimer = 0.55;
+                    }
                   }
                 }
+              } else {
+                e.stateTimer = 0.18;
               }
-            } else {
-              e.stateTimer = 0.18;
             }
             continue;
           }
@@ -3466,7 +3562,8 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           maxMp: derived.maxMp,
         });
 
-        if (checkIsZoneHost()) {
+        // Regular territories are simulated directly on the server; only Blood Castle instances sync from host.
+        if (activeInBloodCastle && checkIsZoneHost()) {
           const livingMonsters = enemies
             .filter((e) => e.aiState !== 'ko')
             .map((e) => ({
@@ -3565,7 +3662,10 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       ctx.fillStyle = activeInBloodCastle ? '#0b0306' : territory.groundColor;
       ctx.fillRect(0, 0, viewWidth, viewHeight);
 
-      ctx.translate(viewWidth / 2 - cameraX + shakeX, viewHeight / 2 - cameraY + shakeY);
+      const cameraZoom = getCameraZoom();
+      ctx.translate(viewWidth / 2 + shakeX, viewHeight / 2 + shakeY);
+      ctx.scale(cameraZoom, cameraZoom);
+      ctx.translate(-cameraX, -cameraY);
 
       if (activeInBloodCastle) {
         // =====================================================================
@@ -4034,9 +4134,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           ctx.restore();
         }
 
-        // Fast viewport frustum culling bounds (world-space) to skip off-screen canvas draw calls
-        const cullHalfW = viewWidth * 0.56;
-        const cullHalfH = viewHeight * 0.56;
+        // Fast viewport frustum culling bounds (world-space) scaled by cameraZoom
+        const cullHalfW = (viewWidth * 0.58) / cameraZoom;
+        const cullHalfH = (viewHeight * 0.58) / cameraZoom;
         const isInView = (wx: number, wy: number, margin = 120) =>
           Math.abs(wx - cameraX) <= cullHalfW + margin &&
           Math.abs(wy - cameraY) <= cullHalfH + margin;

@@ -22,6 +22,8 @@ import type {
   TerritoryId,
 } from '../src/game/types.ts';
 
+export const MAX_CHARACTERS_PER_ACCOUNT = 3;
+
 export interface CharacterPublicSummary {
   id: string;
   nickname: string;
@@ -40,8 +42,13 @@ export interface CharacterPublicSummary {
 
 export interface PersistedCharacterRecord {
   id: string;
+  accountId: string | null;
   nickname: string;
   player: PlayerProgressState;
+  posX: number;
+  posY: number;
+  currentHp: number;
+  currentMp: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -60,6 +67,40 @@ export interface TradeLogEntry {
   targetNickname: string;
   summary: Record<string, unknown>;
   completedAt: number;
+}
+
+/**
+ * Validates a player-chosen unique character name (3..18 characters, Latin/Cyrillic/digits/_/-).
+ */
+export function validateUniqueCharacterName(raw: unknown): {
+  valid: boolean;
+  normalized: string;
+  error?: string;
+} {
+  if (typeof raw !== 'string') {
+    return { valid: false, normalized: '', error: 'Введите имя персонажа.' };
+  }
+  const trimmed = raw.trim().replace(/\s+/g, ' ');
+  if (trimmed.length < 3) {
+    return { valid: false, normalized: trimmed, error: 'Имя должно содержать минимум 3 символа.' };
+  }
+  if (trimmed.length > 18) {
+    return { valid: false, normalized: trimmed.slice(0, 18), error: 'Имя не должно превышать 18 символов.' };
+  }
+  if (!/^[a-zA-Zа-яА-ЯёЁ0-9_-]+(?: [a-zA-Zа-яА-ЯёЁ0-9_-]+)*$/.test(trimmed)) {
+    return {
+      valid: false,
+      normalized: trimmed,
+      error: 'Разрешены только буквы (RU/EN), цифры, дефис и подчёркивание.',
+    };
+  }
+  return { valid: true, normalized: trimmed };
+}
+
+function clampServerCoord(raw: unknown, fallback = 0): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(-2400, Math.min(2400, Math.round(n * 10) / 10));
 }
 
 const EQUIP_SLOTS: ItemSlot[] = ['weapon', 'armor', 'helm', 'wings', 'ring', 'pendant'];
@@ -205,6 +246,7 @@ export function sanitizePlayerProgressForDb(raw: unknown): PlayerProgressState {
 
 interface CharacterDbRow {
   id: string;
+  account_id: string | null;
   nickname: string;
   class_id: string;
   class_tier: number;
@@ -231,6 +273,10 @@ interface CharacterDbRow {
   in_blood_castle: number;
   blood_castle_clears: number;
   territory_id: string;
+  pos_x: number;
+  pos_y: number;
+  current_hp: number;
+  current_mp: number;
   kills_in_territory: number;
   total_kills: number;
   bosses_defeated: number;
@@ -284,8 +330,16 @@ export class GameDatabase {
 
   private initSchema(): void {
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS accounts (
+        id TEXT PRIMARY KEY,
+        session_token_hash TEXT UNIQUE NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS characters (
         id TEXT PRIMARY KEY,
+        account_id TEXT,
         nickname TEXT NOT NULL,
         class_id TEXT NOT NULL,
         class_tier INTEGER NOT NULL DEFAULT 1,
@@ -312,6 +366,10 @@ export class GameDatabase {
         in_blood_castle INTEGER NOT NULL DEFAULT 0,
         blood_castle_clears INTEGER NOT NULL DEFAULT 0,
         territory_id TEXT NOT NULL DEFAULT 'lorencia',
+        pos_x REAL NOT NULL DEFAULT 0,
+        pos_y REAL NOT NULL DEFAULT 220,
+        current_hp INTEGER NOT NULL DEFAULT 0,
+        current_mp INTEGER NOT NULL DEFAULT 0,
         kills_in_territory INTEGER NOT NULL DEFAULT 0,
         total_kills INTEGER NOT NULL DEFAULT 0,
         bosses_defeated INTEGER NOT NULL DEFAULT 0,
@@ -375,6 +433,52 @@ export class GameDatabase {
 
       CREATE INDEX IF NOT EXISTS idx_trade_logs_time ON trade_logs (completed_at DESC);
     `);
+
+    // Safe forward migrations for existing VPS SQLite databases
+    const colRows = this.db
+      .prepare('PRAGMA table_info(characters)')
+      .all() as unknown as Array<{ name: string }>;
+    const cols = new Set(colRows.map((c) => c.name));
+    if (!cols.has('account_id')) {
+      this.db.exec('ALTER TABLE characters ADD COLUMN account_id TEXT;');
+    }
+    if (!cols.has('pos_x')) {
+      this.db.exec('ALTER TABLE characters ADD COLUMN pos_x REAL NOT NULL DEFAULT 0;');
+    }
+    if (!cols.has('pos_y')) {
+      this.db.exec('ALTER TABLE characters ADD COLUMN pos_y REAL NOT NULL DEFAULT 220;');
+    }
+    if (!cols.has('current_hp')) {
+      this.db.exec('ALTER TABLE characters ADD COLUMN current_hp INTEGER NOT NULL DEFAULT 0;');
+    }
+    if (!cols.has('current_mp')) {
+      this.db.exec('ALTER TABLE characters ADD COLUMN current_mp INTEGER NOT NULL DEFAULT 0;');
+    }
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_characters_account ON characters (account_id);');
+
+    // Deduplicate any legacy duplicate nicknames before enforcing server-wide case-insensitive uniqueness
+    const dupRows = this.db
+      .prepare(`
+        SELECT id, nickname, LOWER(TRIM(nickname)) AS norm
+        FROM characters
+        ORDER BY updated_at DESC, created_at ASC
+      `)
+      .all() as unknown as Array<{ id: string; nickname: string; norm: string }>;
+    const seenNorm = new Set<string>();
+    for (const row of dupRows) {
+      if (seenNorm.has(row.norm)) {
+        const suffix = row.id.slice(-4);
+        const renamed = `${row.nickname.slice(0, 13)}_${suffix}`;
+        this.db.prepare('UPDATE characters SET nickname = ? WHERE id = ?').run(renamed, row.id);
+        seenNorm.add(renamed.toLowerCase().trim());
+      } else {
+        seenNorm.add(row.norm);
+      }
+    }
+
+    this.db.exec(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_characters_unique_nickname ON characters (LOWER(TRIM(nickname)));'
+    );
   }
 
   public close(): void {
@@ -550,11 +654,414 @@ export class GameDatabase {
 
     return {
       id: row.id,
+      accountId: row.account_id ?? null,
       nickname: row.nickname,
       player,
+      posX: Number.isFinite(Number(row.pos_x)) ? Number(row.pos_x) : 0,
+      posY: Number.isFinite(Number(row.pos_y)) ? Number(row.pos_y) : 220,
+      currentHp: Math.max(0, Math.round(Number(row.current_hp) || 0)),
+      currentMp: Math.max(0, Math.round(Number(row.current_mp) || 0)),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
+  }
+
+  /**
+   * Creates a persistent browser account backed by a hashed HttpOnly session token.
+   */
+  public createAccount(): { accountId: string; sessionToken: string } {
+    const accountId = `acc_${crypto.randomBytes(8).toString('hex')}`;
+    const sessionToken = crypto.randomBytes(32).toString('hex');
+    const sessionTokenHash = hashOwnerToken(sessionToken);
+    const now = Date.now();
+    this.db
+      .prepare(
+        'INSERT INTO accounts (id, session_token_hash, created_at, updated_at) VALUES (?, ?, ?, ?)'
+      )
+      .run(accountId, sessionTokenHash, now, now);
+    return { accountId, sessionToken };
+  }
+
+  /**
+   * Resolves an account ID from an HttpOnly session token using constant-time verification.
+   */
+  public getAccountIdBySessionToken(token: string): string | null {
+    if (!token || token.length < 32) return null;
+    const candidateHash = hashOwnerToken(token);
+    const row = this.db
+      .prepare('SELECT id, session_token_hash FROM accounts WHERE session_token_hash = ?')
+      .get(candidateHash) as unknown as { id: string; session_token_hash: string } | undefined;
+    if (!row) return null;
+    if (!verifyOwnerTokenHash(token, row.session_token_hash)) return null;
+    return row.id;
+  }
+
+  /**
+   * Checks whether a character name is valid and globally unique across the entire server.
+   */
+  public isNicknameAvailable(rawName: unknown): {
+    valid: boolean;
+    available: boolean;
+    normalized: string;
+    error?: string;
+  } {
+    const check = validateUniqueCharacterName(rawName);
+    if (!check.valid) {
+      return {
+        valid: false,
+        available: false,
+        normalized: check.normalized,
+        error: check.error,
+      };
+    }
+    const existing = this.db
+      .prepare('SELECT id FROM characters WHERE LOWER(TRIM(nickname)) = LOWER(TRIM(?)) LIMIT 1')
+      .get(check.normalized) as unknown as { id: string } | undefined;
+    if (existing) {
+      return {
+        valid: true,
+        available: false,
+        normalized: check.normalized,
+        error: `Имя «${check.normalized}» уже занято на сервере!`,
+      };
+    }
+    return { valid: true, available: true, normalized: check.normalized };
+  }
+
+  /**
+   * Lists all characters owned by an account (up to 3 slots), with full gear & vitals.
+   */
+  public listAccountCharacters(accountId: string): PersistedCharacterRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM characters WHERE account_id = ? ORDER BY created_at ASC LIMIT ?')
+      .all(accountId, MAX_CHARACTERS_PER_ACCOUNT) as unknown as CharacterDbRow[];
+    return rows.map((row) => this.hydrateCharacter(row));
+  }
+
+  /**
+   * Creates a new character for an account (max 3 per account, globally unique name across server).
+   */
+  public createCharacterForAccount(params: {
+    accountId: string;
+    nickname: unknown;
+    classId: unknown;
+  }):
+    | { status: 'ok'; record: PersistedCharacterRecord; ownerToken: string }
+    | { status: 'limit_reached' | 'name_taken' | 'invalid_name'; error: string } {
+    const nameCheck = this.isNicknameAvailable(params.nickname);
+    if (!nameCheck.valid) {
+      return {
+        status: 'invalid_name',
+        error: nameCheck.error ?? 'Некорректное имя персонажа.',
+      };
+    }
+    if (!nameCheck.available) {
+      return {
+        status: 'name_taken',
+        error: nameCheck.error ?? `Имя «${nameCheck.normalized}» уже занято на сервере!`,
+      };
+    }
+
+    const countRow = this.db
+      .prepare('SELECT COUNT(*) AS cnt FROM characters WHERE account_id = ?')
+      .get(params.accountId) as unknown as { cnt: number };
+    if ((Number(countRow?.cnt) || 0) >= MAX_CHARACTERS_PER_ACCOUNT) {
+      return {
+        status: 'limit_reached',
+        error: `Достигнут лимит: максимум ${MAX_CHARACTERS_PER_ACCOUNT} персонажа на аккаунт.`,
+      };
+    }
+
+    const classId = sanitizeClassId(params.classId);
+    const initialPlayer = createInitialPlayerState(classId);
+    const id = `char_${crypto.randomBytes(8).toString('hex')}`;
+    const ownerToken = crypto.randomBytes(32).toString('hex');
+    const ownerTokenHash = hashOwnerToken(ownerToken);
+    const now = Date.now();
+    const startX = 0;
+    const startY = 220;
+
+    try {
+      this.runInTransaction(() => {
+        this.db
+          .prepare(`
+            INSERT INTO characters (
+              id, account_id, nickname, class_id, class_tier, level, resets, exp, exp_to_next, stat_points,
+              str, agi, vit, ene, zen,
+              jewel_bless, jewel_soul, jewel_life, jewel_chaos,
+              hp_potions, mp_potions, has_first_prof_quest_item,
+              blood_scrolls, blood_fangs, blood_castle_tickets, in_blood_castle, blood_castle_clears,
+              territory_id, pos_x, pos_y, current_hp, current_mp,
+              kills_in_territory, total_kills, bosses_defeated, highest_reached_territory_idx,
+              learned_skills_json, owner_token_hash, created_at, updated_at
+            ) VALUES (
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?,
+              ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?,
+              ?, ?, ?, ?
+            )
+          `)
+          .run(
+            id,
+            params.accountId,
+            nameCheck.normalized,
+            initialPlayer.classId,
+            initialPlayer.classTier,
+            initialPlayer.level,
+            initialPlayer.resets,
+            initialPlayer.exp,
+            initialPlayer.expToNext,
+            initialPlayer.statPoints,
+            initialPlayer.attributes.str,
+            initialPlayer.attributes.agi,
+            initialPlayer.attributes.vit,
+            initialPlayer.attributes.ene,
+            initialPlayer.zen,
+            initialPlayer.jewels.bless,
+            initialPlayer.jewels.soul,
+            initialPlayer.jewels.life,
+            initialPlayer.jewels.chaos,
+            initialPlayer.hpPotions,
+            initialPlayer.mpPotions,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            initialPlayer.territoryId,
+            startX,
+            startY,
+            0,
+            0,
+            0,
+            0,
+            0,
+            initialPlayer.highestReachedTerritoryIdx,
+            JSON.stringify(initialPlayer.learnedSkills),
+            ownerTokenHash,
+            now,
+            now
+          );
+
+        this.replaceCharacterItemsTx(id, initialPlayer);
+      });
+    } catch {
+      return {
+        status: 'name_taken',
+        error: `Имя «${nameCheck.normalized}» уже занято на сервере!`,
+      };
+    }
+
+    return {
+      status: 'ok',
+      record: {
+        id,
+        accountId: params.accountId,
+        nickname: nameCheck.normalized,
+        player: initialPlayer,
+        posX: startX,
+        posY: startY,
+        currentHp: 0,
+        currentMp: 0,
+        createdAt: now,
+        updatedAt: now,
+      },
+      ownerToken,
+    };
+  }
+
+  public getCharacterForAccount(
+    characterId: string,
+    accountId: string
+  ): { status: 'ok'; record: PersistedCharacterRecord } | { status: 'not_found' | 'forbidden' } {
+    const cleanId = sanitizeCharacterId(characterId);
+    if (!cleanId) return { status: 'not_found' };
+    const row = this.db
+      .prepare('SELECT * FROM characters WHERE id = ?')
+      .get(cleanId) as unknown as CharacterDbRow | undefined;
+    if (!row) return { status: 'not_found' };
+    if (row.account_id !== accountId) return { status: 'forbidden' };
+    return { status: 'ok', record: this.hydrateCharacter(row) };
+  }
+
+  public updateCharacterForAccount(params: {
+    characterId: string;
+    accountId: string;
+    player: unknown;
+    posX?: number;
+    posY?: number;
+    currentHp?: number;
+    currentMp?: number;
+  }): { status: 'ok'; record: PersistedCharacterRecord } | { status: 'not_found' | 'forbidden' } {
+    const cleanId = sanitizeCharacterId(params.characterId);
+    if (!cleanId) return { status: 'not_found' };
+
+    const existing = this.db
+      .prepare(
+        'SELECT id, account_id, nickname, pos_x, pos_y, current_hp, current_mp, created_at FROM characters WHERE id = ?'
+      )
+      .get(cleanId) as unknown as
+      | {
+          id: string;
+          account_id: string | null;
+          nickname: string;
+          pos_x: number;
+          pos_y: number;
+          current_hp: number;
+          current_mp: number;
+          created_at: number;
+        }
+      | undefined;
+
+    if (!existing) return { status: 'not_found' };
+    if (existing.account_id !== params.accountId) return { status: 'forbidden' };
+
+    const player = sanitizePlayerProgressForDb(params.player);
+    const posX =
+      params.posX !== undefined ? clampServerCoord(params.posX, existing.pos_x) : existing.pos_x;
+    const posY =
+      params.posY !== undefined ? clampServerCoord(params.posY, existing.pos_y) : existing.pos_y;
+    const currentHp =
+      params.currentHp !== undefined
+        ? clampPositiveInt(params.currentHp, existing.current_hp, 100_000_000)
+        : existing.current_hp;
+    const currentMp =
+      params.currentMp !== undefined
+        ? clampPositiveInt(params.currentMp, existing.current_mp, 100_000_000)
+        : existing.current_mp;
+    const now = Date.now();
+
+    this.runInTransaction(() => {
+      this.db
+        .prepare(`
+          UPDATE characters SET
+            class_id = ?, class_tier = ?, level = ?, resets = ?,
+            exp = ?, exp_to_next = ?, stat_points = ?,
+            str = ?, agi = ?, vit = ?, ene = ?, zen = ?,
+            jewel_bless = ?, jewel_soul = ?, jewel_life = ?, jewel_chaos = ?,
+            hp_potions = ?, mp_potions = ?, has_first_prof_quest_item = ?,
+            blood_scrolls = ?, blood_fangs = ?, blood_castle_tickets = ?,
+            in_blood_castle = ?, blood_castle_clears = ?,
+            territory_id = ?, pos_x = ?, pos_y = ?, current_hp = ?, current_mp = ?,
+            kills_in_territory = ?, total_kills = ?,
+            bosses_defeated = ?, highest_reached_territory_idx = ?,
+            learned_skills_json = ?, updated_at = ?
+          WHERE id = ?
+        `)
+        .run(
+          player.classId,
+          player.classTier,
+          player.level,
+          player.resets,
+          player.exp,
+          player.expToNext,
+          player.statPoints,
+          player.attributes.str,
+          player.attributes.agi,
+          player.attributes.vit,
+          player.attributes.ene,
+          player.zen,
+          player.jewels.bless,
+          player.jewels.soul,
+          player.jewels.life,
+          player.jewels.chaos,
+          player.hpPotions,
+          player.mpPotions,
+          player.hasFirstProfQuestItem ? 1 : 0,
+          player.bloodScrolls,
+          player.bloodFangs,
+          player.bloodCastleTickets,
+          player.inBloodCastle ? 1 : 0,
+          player.bloodCastleClears,
+          player.territoryId,
+          posX,
+          posY,
+          currentHp,
+          currentMp,
+          player.killsInTerritory,
+          player.totalKills,
+          player.bossesDefeated,
+          player.highestReachedTerritoryIdx,
+          JSON.stringify(player.learnedSkills),
+          now,
+          cleanId
+        );
+
+      this.replaceCharacterItemsTx(cleanId, player);
+    });
+
+    return {
+      status: 'ok',
+      record: {
+        id: cleanId,
+        accountId: params.accountId,
+        nickname: existing.nickname,
+        player,
+        posX,
+        posY,
+        currentHp,
+        currentMp,
+        createdAt: existing.created_at,
+        updatedAt: now,
+      },
+    };
+  }
+
+  /**
+   * Lightweight server-side vitals & coordinates checkpoint (called on WS periodic flush & disconnect)
+   * so HP, MP, location, and territory persist seamlessly even if the browser closes abruptly.
+   */
+  public updateCharacterRuntimeVitals(params: {
+    characterId: string;
+    accountId: string;
+    territoryId: TerritoryId;
+    inBloodCastle: boolean;
+    posX: number;
+    posY: number;
+    currentHp: number;
+    currentMp: number;
+  }): boolean {
+    const cleanId = sanitizeCharacterId(params.characterId);
+    if (!cleanId) return false;
+    const now = Date.now();
+    const res = this.db
+      .prepare(`
+        UPDATE characters
+        SET territory_id = ?, in_blood_castle = ?, pos_x = ?, pos_y = ?, current_hp = ?, current_mp = ?, updated_at = ?
+        WHERE id = ? AND account_id = ?
+      `)
+      .run(
+        sanitizeTerritoryId(params.territoryId),
+        params.inBloodCastle ? 1 : 0,
+        clampServerCoord(params.posX, 0),
+        clampServerCoord(params.posY, 220),
+        clampPositiveInt(params.currentHp, 0, 100_000_000),
+        clampPositiveInt(params.currentMp, 0, 100_000_000),
+        now,
+        cleanId,
+        params.accountId
+      );
+    return Number(res.changes) > 0;
+  }
+
+  public deleteCharacterForAccount(
+    characterId: string,
+    accountId: string
+  ): 'ok' | 'not_found' | 'forbidden' {
+    const cleanId = sanitizeCharacterId(characterId);
+    if (!cleanId) return 'not_found';
+    const row = this.db
+      .prepare('SELECT id, account_id FROM characters WHERE id = ?')
+      .get(cleanId) as unknown as { id: string; account_id: string | null } | undefined;
+    if (!row) return 'not_found';
+    if (row.account_id !== accountId) return 'forbidden';
+    this.db.prepare('DELETE FROM characters WHERE id = ? AND account_id = ?').run(cleanId, accountId);
+    return 'ok';
   }
 
   /**
@@ -568,7 +1075,13 @@ export class GameDatabase {
     const id = `char_${crypto.randomBytes(8).toString('hex')}`;
     const ownerToken = crypto.randomBytes(32).toString('hex');
     const ownerTokenHash = hashOwnerToken(ownerToken);
-    const nickname = sanitizePlayerNickname(params.nickname, 'Герой-MU');
+    let nickname = sanitizePlayerNickname(params.nickname, 'Герой-MU');
+    const nameTaken = this.db
+      .prepare('SELECT id FROM characters WHERE LOWER(TRIM(nickname)) = LOWER(TRIM(?)) LIMIT 1')
+      .get(nickname);
+    if (nameTaken) {
+      nickname = `${nickname.slice(0, 13)}_${id.slice(-4)}`;
+    }
     const player = sanitizePlayerProgressForDb(params.player);
     const now = Date.now();
 
@@ -576,20 +1089,22 @@ export class GameDatabase {
       this.db
         .prepare(`
           INSERT INTO characters (
-            id, nickname, class_id, class_tier, level, resets, exp, exp_to_next, stat_points,
+            id, account_id, nickname, class_id, class_tier, level, resets, exp, exp_to_next, stat_points,
             str, agi, vit, ene, zen,
             jewel_bless, jewel_soul, jewel_life, jewel_chaos,
             hp_potions, mp_potions, has_first_prof_quest_item,
             blood_scrolls, blood_fangs, blood_castle_tickets, in_blood_castle, blood_castle_clears,
-            territory_id, kills_in_territory, total_kills, bosses_defeated, highest_reached_territory_idx,
+            territory_id, pos_x, pos_y, current_hp, current_mp,
+            kills_in_territory, total_kills, bosses_defeated, highest_reached_territory_idx,
             learned_skills_json, owner_token_hash, created_at, updated_at
           ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?,
             ?, ?, ?,
             ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?,
+            ?, 0, 220, 0, 0,
+            ?, ?, ?, ?,
             ?, ?, ?, ?
           )
         `)
@@ -637,8 +1152,13 @@ export class GameDatabase {
     return {
       record: {
         id,
+        accountId: null,
         nickname,
         player,
+        posX: 0,
+        posY: 220,
+        currentHp: 0,
+        currentMp: 0,
         createdAt: now,
         updatedAt: now,
       },
@@ -758,8 +1278,13 @@ export class GameDatabase {
       status: 'ok',
       record: {
         id: cleanId,
+        accountId: null,
         nickname,
         player,
+        posX: 0,
+        posY: 220,
+        currentHp: 0,
+        currentMp: 0,
         createdAt: existing.created_at,
         updatedAt: now,
       },

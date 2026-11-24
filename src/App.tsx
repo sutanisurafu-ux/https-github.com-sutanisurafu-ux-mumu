@@ -7,12 +7,15 @@ import { GameCanvas, GameEngineActions } from './components/GameCanvas';
 import { HudDomRefs, HudOverlay } from './components/HudOverlay';
 import { CrossModalDragPayload } from './components/ItemHoverTooltip';
 import { MobileControls } from './components/MobileControls';
+import { MobileOrientationGuard } from './components/MobileOrientationGuard';
 import { PartyCoopModal } from './components/PartyCoopModal';
 import { PlayerTradeModal } from './components/PlayerTradeModal';
 import { StatusModal } from './components/StatusModal';
 import { TerritoryModal } from './components/TerritoryModal';
 import { TitleScreen } from './components/TitleScreen';
 import { CHARACTER_SCALING, SERVER_CONFIG } from './config';
+import { ServerMonsterAttackEvent } from './game/worldMonsters';
+import { detectTouchDevice, requestMobileLandscapeFullscreen } from './utils/mobileOrientation';
 import {
   DEFAULT_PARTY_ROOM,
   applyCompletedTradeToPlayer,
@@ -48,6 +51,7 @@ import {
 } from './game/rules';
 import { soundEngine } from './game/sound';
 import {
+  AccountCharacterRecord,
   BloodCastleStage,
   CharacterAttributes,
   CharacterClassId,
@@ -126,9 +130,13 @@ export default function App() {
   const partySelfIdRef = useRef<string>(partySelfId);
   partySelfIdRef.current = partySelfId;
 
-  // Backend SQLite character persistence handle (ownerToken kept strictly in memory, never localStorage)
-  const persistedCharRef = useRef<{ characterId: string; ownerToken: string } | null>(null);
-  const creatingCharRef = useRef<boolean>(false);
+  // Account & 3-Slot Server-Persisted Characters (backed by HttpOnly mu_session cookie + SQLite)
+  const [accountCharacters, setAccountCharacters] = useState<AccountCharacterRecord[]>([]);
+  const [maxCharacterSlots, setMaxCharacterSlots] = useState<number>(3);
+  const [loadingCharacters, setLoadingCharacters] = useState<boolean>(true);
+  const [activeCharacterId, setActiveCharacterId] = useState<string | null>(null);
+  const activeCharacterIdRef = useRef<string | null>(null);
+  activeCharacterIdRef.current = activeCharacterId;
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [hudSync, setHudSync] = useState<{
@@ -190,80 +198,103 @@ export default function App() {
     document.body.dataset.state = phase;
   }, [phase]);
 
-  // Automatically create and auto-save character + equipped gear + inventory to SQLite backend
-  useEffect(() => {
-    if (phase !== 'playing') return;
-    let cancelled = false;
-
-    const ensureCreatedOrSave = () => {
-      if (cancelled) return;
-      const handle = persistedCharRef.current;
-      const payload = {
-        nickname: partyNicknameRef.current,
-        player: playerStateRef.current,
-      };
-
-      if (!handle) {
-        if (creatingCharRef.current) return;
-        creatingCharRef.current = true;
-        void fetch('/api/characters', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
-          .then((res) => (res.ok ? res.json() : null))
-          .then((data: { ok?: boolean; characterId?: string; ownerToken?: string } | null) => {
-            if (!cancelled && data?.ok && data.characterId && data.ownerToken) {
-              persistedCharRef.current = {
-                characterId: data.characterId,
-                ownerToken: data.ownerToken,
-              };
-            }
-          })
-          .catch(() => {
-            // Non-fatal offline/network hiccup
-          })
-          .finally(() => {
-            creatingCharRef.current = false;
-          });
-        return;
-      }
-
-      void fetch(`/api/characters/${encodeURIComponent(handle.characterId)}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${handle.ownerToken}`,
-        },
-        body: JSON.stringify(payload),
-      }).catch(() => {
-        // Non-fatal auto-save retry on next state change
+  const fetchAccountCharacters = useCallback(async () => {
+    try {
+      const res = await fetch('/api/account/me', {
+        method: 'GET',
+        credentials: 'include',
       });
-    };
-
-    if (!persistedCharRef.current) {
-      ensureCreatedOrSave();
-      return () => {
-        cancelled = true;
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        ok?: boolean;
+        maxSlots?: number;
+        characters?: AccountCharacterRecord[];
       };
+      if (data.ok) {
+        if (typeof data.maxSlots === 'number') setMaxCharacterSlots(data.maxSlots);
+        if (Array.isArray(data.characters)) setAccountCharacters(data.characters);
+      }
+    } catch {
+      // Non-fatal offline fallback
+    } finally {
+      setLoadingCharacters(false);
     }
+  }, []);
 
+  useEffect(() => {
+    void fetchAccountCharacters();
+  }, [fetchAccountCharacters]);
+
+  const persistActiveCharacterNow = useCallback((useKeepalive = false) => {
+    const charId = activeCharacterIdRef.current;
+    if (!charId) return;
+    const p = playerStateRef.current;
+    const vitals = engineActionsRef.current?.getHeroRuntimeVitals();
+    const derived = calculateDerivedStats(p);
+    const body = JSON.stringify({
+      player: p,
+      posX: vitals ? vitals.x : 0,
+      posY: vitals ? vitals.y : 220,
+      currentHp: vitals ? vitals.hp : derived.maxHp,
+      currentMp: vitals ? vitals.mp : derived.maxMp,
+    });
+    void fetch(`/api/account/characters/${encodeURIComponent(charId)}`, {
+      method: 'PUT',
+      credentials: 'include',
+      keepalive: useKeepalive,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      body,
+    }).catch(() => {
+      // Non-fatal retry on next save tick
+    });
+  }, []);
+
+  // Automatically save active character + gear + inventory + server coordinates & HP/MP to SQLite
+  useEffect(() => {
+    if (phase !== 'playing' || !activeCharacterId) return;
     if (autoSaveTimerRef.current) {
       clearTimeout(autoSaveTimerRef.current);
     }
     autoSaveTimerRef.current = setTimeout(() => {
       autoSaveTimerRef.current = null;
-      ensureCreatedOrSave();
+      persistActiveCharacterNow(false);
     }, SERVER_CONFIG.characterAutoSaveDebounceMs);
 
     return () => {
-      cancelled = true;
       if (autoSaveTimerRef.current) {
         clearTimeout(autoSaveTimerRef.current);
         autoSaveTimerRef.current = null;
       }
     };
-  }, [phase, player, partyNickname]);
+  }, [phase, player, activeCharacterId, persistActiveCharacterNow]);
+
+  // Periodic checkpoint (every 10s) & flush on tab close / page reload (F5) so coordinates & HP never get lost
+  useEffect(() => {
+    if (phase !== 'playing' || !activeCharacterId) return;
+    const periodicSave = setInterval(() => {
+      persistActiveCharacterNow(false);
+    }, 10_000);
+    const handleFlushOnExit = () => {
+      persistActiveCharacterNow(true);
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        persistActiveCharacterNow(true);
+      }
+    };
+    window.addEventListener('beforeunload', handleFlushOnExit);
+    window.addEventListener('pagehide', handleFlushOnExit);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      clearInterval(periodicSave);
+      window.removeEventListener('beforeunload', handleFlushOnExit);
+      window.removeEventListener('pagehide', handleFlushOnExit);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [phase, activeCharacterId, persistActiveCharacterNow]);
 
   // Real-time WebSocket Connection & Automatic Reconnection for Online Co-op Party
   useEffect(() => {
@@ -290,19 +321,23 @@ export default function App() {
         setPartyError(null);
         const p = playerStateRef.current;
         const derived = calculateDerivedStats(p);
+        const vitals = engineActionsRef.current?.getHeroRuntimeVitals();
         socket.send(
           JSON.stringify({
             type: 'party:join',
             roomCode: partyRoomCodeRef.current,
             nickname: partyNicknameRef.current,
+            characterId: activeCharacterIdRef.current ?? undefined,
             classId: p.classId,
             classTier: p.classTier,
             level: p.level,
             resets: p.resets,
-            hp: derived.maxHp,
+            hp: vitals ? vitals.hp : derived.maxHp,
             maxHp: derived.maxHp,
-            mp: derived.maxMp,
+            mp: vitals ? vitals.mp : derived.maxMp,
             maxMp: derived.maxMp,
+            x: vitals ? vitals.x : 0,
+            y: vitals ? vitals.y : 220,
             territoryId: p.territoryId,
             inBloodCastle: p.inBloodCastle,
             hasWeapon: p.equipped.weapon !== null,
@@ -543,6 +578,13 @@ export default function App() {
           return;
         }
 
+        if (data.type === 'party:monster_attack') {
+          const event = data.event as ServerMonsterAttackEvent | undefined;
+          if (!event || typeof event.enemyId !== 'string') return;
+          engineActionsRef.current?.applyServerMonsterAttack(event);
+          return;
+        }
+
         if (data.type === 'party:shared_kill') {
           const kill = data.kill as PartyKillShareEvent | undefined;
           if (!kill) return;
@@ -719,19 +761,23 @@ export default function App() {
       if (ws && ws.readyState === WebSocket.OPEN) {
         const p = playerStateRef.current;
         const derived = calculateDerivedStats(p);
+        const vitals = engineActionsRef.current?.getHeroRuntimeVitals();
         ws.send(
           JSON.stringify({
             type: 'party:join',
             roomCode: nextRoom,
             nickname: nextNick,
+            characterId: activeCharacterIdRef.current ?? undefined,
             classId: p.classId,
             classTier: p.classTier,
             level: p.level,
             resets: p.resets,
-            hp: derived.maxHp,
+            hp: vitals ? vitals.hp : derived.maxHp,
             maxHp: derived.maxHp,
-            mp: derived.maxMp,
+            mp: vitals ? vitals.mp : derived.maxMp,
             maxMp: derived.maxMp,
+            x: vitals ? vitals.x : 0,
+            y: vitals ? vitals.y : 220,
             territoryId: p.territoryId,
             inBloodCastle: p.inBloodCastle,
             hasWeapon: p.equipped.weapon !== null,
@@ -1001,15 +1047,97 @@ export default function App() {
     }, 50);
   }, []);
 
-  const startNewGameWithClass = useCallback((classId: CharacterClassId) => {
+  const handleCreateAccountCharacter = useCallback(
+    async (
+      nickname: string,
+      classId: CharacterClassId
+    ): Promise<{ ok: boolean; character?: AccountCharacterRecord; error?: string }> => {
+      try {
+        const res = await fetch('/api/account/characters', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+          },
+          body: JSON.stringify({ nickname, classId }),
+        });
+        const data = (await res.json()) as {
+          ok?: boolean;
+          character?: AccountCharacterRecord;
+          error?: string;
+        };
+        if (!res.ok || !data.ok || !data.character) {
+          return {
+            ok: false,
+            error: data.error ?? 'Не удалось создать персонажа.',
+          };
+        }
+        const created = data.character;
+        setAccountCharacters((prev) => [created, ...prev.filter((c) => c.id !== created.id)]);
+        return { ok: true, character: created };
+      } catch {
+        return { ok: false, error: 'Нет связи с сервером для создания персонажа.' };
+      }
+    },
+    []
+  );
+
+  const handleDeleteAccountCharacter = useCallback(async (characterId: string) => {
+    try {
+      const res = await fetch(`/api/account/characters/${encodeURIComponent(characterId)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+      });
+      if (res.ok) {
+        setAccountCharacters((prev) => prev.filter((c) => c.id !== characterId));
+        if (activeCharacterIdRef.current === characterId) {
+          activeCharacterIdRef.current = null;
+          setActiveCharacterId(null);
+        }
+      }
+    } catch {
+      // Non-fatal
+    }
+  }, []);
+
+  const handleEnterCharacter = useCallback(async (record: AccountCharacterRecord) => {
     document.body.dataset.state = 'playing';
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
-    const freshState = createInitialPlayerState(classId);
-    // Start a fresh persisted profile record in SQLite for the newly started character
-    persistedCharRef.current = null;
-    setPlayer(freshState);
+    if (detectTouchDevice()) {
+      void requestMobileLandscapeFullscreen();
+    }
+
+    // Load latest server snapshot of this character (coords, HP/MP, items, stats)
+    let latestRecord = record;
+    try {
+      const res = await fetch(`/api/account/characters/${encodeURIComponent(record.id)}`, {
+        method: 'GET',
+        credentials: 'include',
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { ok?: boolean; character?: AccountCharacterRecord };
+        if (data.ok && data.character) {
+          latestRecord = data.character;
+        }
+      }
+    } catch {
+      // Fallback to cached lobby record
+    }
+
+    activeCharacterIdRef.current = latestRecord.id;
+    setActiveCharacterId(latestRecord.id);
+    setSelectedClass(latestRecord.player.classId);
+    setPartyNickname(latestRecord.nickname);
+    partyNicknameRef.current = latestRecord.nickname;
+    setPlayer(latestRecord.player);
+    playerStateRef.current = latestRecord.player;
+
     setAutoHunt(false);
     setInventoryOpen(false);
     setStatsOpen(false);
@@ -1019,10 +1147,71 @@ export default function App() {
     setEndSnapshot(null);
     sessionStartRef.current = Date.now();
     setPhase('playing');
+
+    const derived = calculateDerivedStats(latestRecord.player);
+    const restoredHp =
+      latestRecord.currentHp > 0
+        ? Math.min(derived.maxHp, latestRecord.currentHp)
+        : derived.maxHp;
+    const restoredMp =
+      latestRecord.currentMp > 0
+        ? Math.min(derived.maxMp, latestRecord.currentMp)
+        : derived.maxMp;
+
+    // Bind live WebSocket connection to this server-hosted character
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({
+          type: 'party:join',
+          roomCode: partyRoomCodeRef.current,
+          nickname: latestRecord.nickname,
+          characterId: latestRecord.id,
+          classId: latestRecord.player.classId,
+          classTier: latestRecord.player.classTier,
+          level: latestRecord.player.level,
+          resets: latestRecord.player.resets,
+          hp: restoredHp,
+          maxHp: derived.maxHp,
+          mp: restoredMp,
+          maxMp: derived.maxMp,
+          x: latestRecord.posX,
+          y: latestRecord.posY,
+          territoryId: latestRecord.player.territoryId,
+          inBloodCastle: latestRecord.player.inBloodCastle,
+          hasWeapon: latestRecord.player.equipped.weapon !== null,
+          hasWings: latestRecord.player.equipped.wings !== null,
+        })
+      );
+    }
+
     setTimeout(() => {
-      engineActionsRef.current?.resetTerritoryArena(true);
-    }, 0);
+      engineActionsRef.current?.resetTerritoryArena(false);
+      engineActionsRef.current?.applyServerHeroVitals({
+        x: latestRecord.posX,
+        y: latestRecord.posY,
+        hp: restoredHp,
+        mp: restoredMp,
+      });
+      engineActionsRef.current?.notifyStatusMessage(
+        `🛡️ ${latestRecord.nickname} (Ур.${latestRecord.player.level}) загружен с сервера!`,
+        '#34d399'
+      );
+    }, 30);
   }, []);
+
+  const handleReturnToLobby = useCallback(() => {
+    persistActiveCharacterNow(false);
+    setPhase('title');
+    setInventoryOpen(false);
+    setStatsOpen(false);
+    setShopOpen(false);
+    setActiveDrawer('none');
+    setEndSnapshot(null);
+    setTimeout(() => {
+      void fetchAccountCharacters();
+    }, 150);
+  }, [persistActiveCharacterNow, fetchAccountCharacters]);
 
   useEffect(() => {
     if (shopOpen && !hudSync.isNearShop) {
@@ -1099,10 +1288,6 @@ export default function App() {
       }
 
       if (phase === 'title') {
-        if (e.code === 'Enter' || e.code === 'Space') {
-          e.preventDefault();
-          startNewGameWithClass(selectedClass);
-        }
         return;
       }
 
@@ -1182,8 +1367,6 @@ export default function App() {
     statsOpen,
     shopOpen,
     activeDrawer,
-    selectedClass,
-    startNewGameWithClass,
     buildSnapshot,
     handleToggleAutoHunt,
     handleApproachOrOpenShop,
@@ -1680,12 +1863,16 @@ export default function App() {
 
       {phase === 'title' && (
         <TitleScreen
+          characters={accountCharacters}
+          maxSlots={maxCharacterSlots}
+          loadingCharacters={loadingCharacters}
           selectedClass={selectedClass}
           onSelectClass={(clsId) => {
             setSelectedClass(clsId);
-            setPlayer(createInitialPlayerState(clsId));
           }}
-          onStartGame={() => startNewGameWithClass(selectedClass)}
+          onEnterCharacter={(rec) => void handleEnterCharacter(rec)}
+          onCreateCharacter={handleCreateAccountCharacter}
+          onDeleteCharacter={handleDeleteAccountCharacter}
         />
       )}
 
@@ -1902,15 +2089,10 @@ export default function App() {
             setEndSnapshot(null);
             engineActionsRef.current?.resetTerritoryArena(true);
           }}
-          onReturnTitle={() => {
-            setPhase('title');
-            setInventoryOpen(false);
-            setStatsOpen(false);
-            setShopOpen(false);
-            setActiveDrawer('none');
-          }}
+          onReturnTitle={handleReturnToLobby}
         />
       )}
+      <MobileOrientationGuard />
     </main>
   );
 }
