@@ -190,13 +190,57 @@ export const CrystalGlobe: React.FC<{
 };
 
 /**
- * Classic MU Online Glass Potion Bottle (HP Ruby Vial / MP Sapphire-Violet Vial).
+ * Classic MU Online Glass Potion Bottle (HP Ruby Vial / Large HP Ornate Goblet / MP Sapphire-Violet Vial).
  */
-export const PotionBottleIcon: React.FC<{ variant: 'hp' | 'mp'; className?: string }> = ({
+export const PotionBottleIcon: React.FC<{ variant: 'hp' | 'large_hp' | 'mp'; className?: string }> = ({
   variant,
   className = 'w-7 h-7',
 }) => {
-  const isHp = variant === 'hp';
+  const isLargeHp = variant === 'large_hp';
+  const isHp = variant === 'hp' || isLargeHp;
+
+  if (isLargeHp) {
+    return (
+      <svg viewBox="0 0 36 36" className={className} aria-hidden="true">
+        <defs>
+          <linearGradient id="potLiquid_large_hp" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#fde047" />
+            <stop offset="32%" stopColor="#ef4444" />
+            <stop offset="75%" stopColor="#b91c1c" />
+            <stop offset="100%" stopColor="#58111a" />
+          </linearGradient>
+        </defs>
+        {/* Ornate golden stopper */}
+        <rect x="13.5" y="2" width="9" height="4.5" rx="1.4" fill="#f59e0b" stroke="#451a03" strokeWidth="1" />
+        {/* Wide gilded crown collar */}
+        <path d="M11,6.5 L25,6.5 L23.5,10.5 L12.5,10.5 Z" fill="#d4a853" stroke="#2c1d0f" strokeWidth="1" />
+        {/* Large rounded ruby flask body */}
+        <path
+          d="M12.5,10.5 L23.5,10.5 L26.5,14.5 C30.5,18 31,25 28.2,30 C25.8,33 21.6,34 18,34 C14.4,34 10.2,33 7.8,30 C5,25 5.5,18 9.5,14.5 Z"
+          fill="#1b0e14"
+          stroke="#f59e0b"
+          strokeWidth="1.4"
+        />
+        {/* Glowing crimson-gold elixir */}
+        <path
+          d="M9.6,16.2 L26.4,16.2 C29.2,19 29.5,24.8 27,29 C25,31.8 21,32.5 18,32.5 C15,32.5 11,31.8 9,29 C6.5,24.8 6.8,19 9.6,16.2 Z"
+          fill="url(#potLiquid_large_hp)"
+        />
+        {/* Golden belt & '+' crest */}
+        <rect x="7.5" y="21.2" width="21" height="2.4" rx="1" fill="#fde047" opacity="0.88" />
+        <path d="M18,18.2 L18,26.6 M13.8,22.4 L22.2,22.4" stroke="#fffbeb" strokeWidth="2" strokeLinecap="round" />
+        {/* Specular highlight */}
+        <path
+          d="M10.8,18.2 C9.2,21.5 9.5,25.8 11.6,28.8"
+          fill="none"
+          stroke="rgba(255,255,255,0.72)"
+          strokeWidth="1.7"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
+
   return (
     <svg viewBox="0 0 36 36" className={className} aria-hidden="true">
       <defs>

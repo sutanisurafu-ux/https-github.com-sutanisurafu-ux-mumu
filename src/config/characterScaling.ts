@@ -18,9 +18,28 @@ export const CHARACTER_SCALING = {
       chaos: 0,
     },
     startHpPotions: 3,
+    startLargeHpPotions: 0,
     startMpPotions: 3,
     startTerritoryId: 'lorencia' as const,
     startHighestReachedTerritoryIdx: 1,
+  },
+
+  /** Параметры банок здоровья и маны */
+  potions: {
+    /** Обычная банка ОЗ: восстанавливает 250 HP, быстрый откат */
+    smallHpHeal: 250,
+    /** Большая банка ОЗ: восстанавливает 500 HP, в 10 раз дороже обычной */
+    largeHpHeal: 500,
+    /** Быстрый откат банок ОЗ (сек) — можно пить чаще */
+    hpCooldownSec: 0.45,
+    /** Откат банок маны (сек) */
+    mpCooldownSec: 1.0,
+    /** Цена 1 обычной банки ОЗ (Zen) */
+    smallHpUnitPrice: 50,
+    /** Цена 1 большой банки ОЗ (в 10 раз дороже обычной = 500 Zen) */
+    largeHpUnitPrice: 500,
+    /** Цена 1 банки маны (Zen) */
+    mpUnitPrice: 40,
   },
 
   /** Максимальный размер инвентаря (ячеек) */

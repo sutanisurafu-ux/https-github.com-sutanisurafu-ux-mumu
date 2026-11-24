@@ -16,7 +16,7 @@ export type CrossModalDragPayload =
   | { source: 'jewel'; jewel: 'bless' | 'soul' | 'life' }
   | { source: 'shop_equipment'; catalogId: string }
   | { source: 'shop_skill_book'; skillId: string }
-  | { source: 'shop_potion'; potionType: 'hp' | 'mp'; packSize: 5 | 20 };
+  | { source: 'shop_potion'; potionType: 'hp' | 'large_hp' | 'mp'; packSize: 5 | 20 };
 
 export type HoverTooltipTarget =
   | {
@@ -44,7 +44,7 @@ export type HoverTooltipTarget =
     }
   | {
       kind: 'potion';
-      potionType: 'hp' | 'mp';
+      potionType: 'hp' | 'large_hp' | 'mp';
       count: number;
       context: 'inventory' | 'shop';
       priceZen?: number;
@@ -358,12 +358,18 @@ export const ItemHoverTooltip: React.FC<{
           <div className="border-b border-amber-500/30 pb-1">
             <div
               className={`font-display text-sm font-extrabold ${
-                target.potionType === 'hp' ? 'text-rose-300' : 'text-sky-300'
+                target.potionType === 'large_hp'
+                  ? 'text-amber-300'
+                  : target.potionType === 'hp'
+                    ? 'text-rose-300'
+                    : 'text-sky-300'
               }`}
             >
-              {target.potionType === 'hp'
-                ? 'Эликсир Исцеления (Банки ОЗ)'
-                : 'Эликсир Духа (Банки Маны)'}
+              {target.potionType === 'large_hp'
+                ? 'Большое Зелье ОЗ (+500 HP)'
+                : target.potionType === 'hp'
+                  ? 'Эликсир Исцеления (+250 HP)'
+                  : 'Эликсир Духа (Банки Маны)'}
             </div>
             <div className="font-mono-num text-xs font-bold text-[#e6dec8]">
               {target.context === 'shop'
@@ -372,9 +378,11 @@ export const ItemHoverTooltip: React.FC<{
             </div>
           </div>
           <p className="text-xs text-[#dfd7c8]">
-            {target.potionType === 'hp'
-              ? 'Мгновенно восстанавливает 48% макс. здоровья [Клавиша Q]. В режиме Авто-Охоты пьётся автоматически при ОЗ ниже 58%.'
-              : 'Мгновенно восстанавливает 55% макс. маны [Клавиша E]. В режиме Авто-Охоты пьётся автоматически при МН ниже 35%.'}
+            {target.potionType === 'large_hp'
+              ? 'Мгновенно восстанавливает +500 ОЗ (быстрый откат 0.45с, клавиша [Z]). В 10 раз дороже обычных банок (500 Zen/шт.). В Авто-Охоте используется при сильной потере здоровья.'
+              : target.potionType === 'hp'
+                ? 'Мгновенно восстанавливает +250 ОЗ (быстрый откат 0.45с, клавиша [Q]). Можно пить чаще! В режиме Авто-Охоты пьётся автоматически при ОЗ ниже 58%.'
+                : 'Мгновенно восстанавливает 55% макс. маны [Клавиша E]. В режиме Авто-Охоты пьётся автоматически при МН ниже 35%.'}
           </p>
           {target.priceZen !== undefined && (
             <div className="flex items-center justify-between border-t border-white/10 pt-1 font-mono-num text-xs">

@@ -206,7 +206,7 @@ export const CityShopModal: React.FC<CityShopModalProps> = ({
   };
 
   const handlePotionMouseEnter = (
-    potionType: 'hp' | 'mp',
+    potionType: 'hp' | 'large_hp' | 'mp',
     packSize: 5 | 20,
     priceZen: number,
     e: React.MouseEvent
@@ -450,22 +450,24 @@ export const CityShopModal: React.FC<CityShopModalProps> = ({
 
           {/* 3. POTIONS SHELF (Drag into Inventory [V] to buy) */}
           <div className="rounded-xl border border-amber-500/30 bg-[#151120] p-3">
-            <div className="mb-2 flex items-center justify-between">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-1">
               <span className="text-xs font-bold text-amber-300">
-                🧪 Зелья ОЗ и Маны (перетащите в Инвентарь [V])
+                🧪 Зелья ОЗ, Большие ОЗ и Маны (перетащите в Инвентарь [V])
               </span>
               <span className="font-mono-num text-[10px] text-[#bfb5a4]">
-                Запас: ОЗ🧪{player.hpPotions} · МН💧{player.mpPotions}
+                Запас: ОЗ🧪{player.hpPotions} · Б.ОЗ🍷{player.largeHpPotions ?? 0} · МН💧{player.mpPotions}
               </span>
             </div>
 
-            <div className="grid grid-cols-4 gap-1.5">
+            <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
               {(
                 [
-                  { type: 'hp' as const, pack: 5 as const, price: 250, label: '+5 ОЗ' },
-                  { type: 'hp' as const, pack: 20 as const, price: 900, label: '+20 ОЗ' },
-                  { type: 'mp' as const, pack: 5 as const, price: 200, label: '+5 МН' },
-                  { type: 'mp' as const, pack: 20 as const, price: 750, label: '+20 МН' },
+                  { type: 'hp' as const, pack: 5 as const, price: 250, label: '+5 ОЗ', sub: '+250 HP · Q' },
+                  { type: 'hp' as const, pack: 20 as const, price: 900, label: '+20 ОЗ', sub: '+250 HP · Q' },
+                  { type: 'large_hp' as const, pack: 5 as const, price: 2500, label: '+5 Б.ОЗ', sub: '+500 HP · Z' },
+                  { type: 'large_hp' as const, pack: 20 as const, price: 9000, label: '+20 Б.ОЗ', sub: '+500 HP · Z' },
+                  { type: 'mp' as const, pack: 5 as const, price: 200, label: '+5 МН', sub: '+55% MP · E' },
+                  { type: 'mp' as const, pack: 20 as const, price: 720, label: '+20 МН', sub: '+55% MP · E' },
                 ]
               ).map((p) => {
                 const canAfford = player.zen >= p.price;
@@ -491,13 +493,18 @@ export const CityShopModal: React.FC<CityShopModalProps> = ({
                     onMouseLeave={() => setHoverTooltip(null)}
                     data-testid={`shop-potion-${p.type}-${p.pack}`}
                     className={`flex flex-col items-center justify-center rounded-xl border p-2 select-none cursor-grab active:cursor-grabbing ${
-                      p.type === 'hp'
-                        ? 'border-rose-500/45 bg-[#1e121a] hover:border-rose-300'
-                        : 'border-sky-500/45 bg-[#111a26] hover:border-sky-300'
+                      p.type === 'large_hp'
+                        ? 'border-amber-400/65 bg-gradient-to-b from-[#2b151c] to-[#1a0f16] hover:border-amber-300'
+                        : p.type === 'hp'
+                          ? 'border-rose-500/45 bg-[#1e121a] hover:border-rose-300'
+                          : 'border-sky-500/45 bg-[#111a26] hover:border-sky-300'
                     }`}
                   >
                     <span className="text-xs font-bold text-[#fdf8ed]">
-                      {p.type === 'hp' ? '🧪' : '💧'} {p.label}
+                      {p.type === 'large_hp' ? '🍷' : p.type === 'hp' ? '🧪' : '💧'} {p.label}
+                    </span>
+                    <span className="mt-0.5 font-mono-num text-[9px] text-[#cfc6b8]">
+                      {p.sub}
                     </span>
                     <span
                       className={`mt-1 font-mono-num text-[10px] font-extrabold ${

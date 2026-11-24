@@ -20,6 +20,7 @@ interface MobileControlsProps {
   hasWeapon: boolean;
   cooldowns: Record<string, number>;
   hpPotions: number;
+  largeHpPotions: number;
   mpPotions: number;
   autoHunt: boolean;
   nearbyLootCount: number;
@@ -30,6 +31,7 @@ interface MobileControlsProps {
   onPrimaryAttack: () => void;
   onUseSkill: (skillIndex: number) => void;
   onUseHpPotion: () => void;
+  onUseLargeHpPotion: () => void;
   onUseMpPotion: () => void;
   onApproachShop: () => void;
   onPickupLoot: () => void;
@@ -65,6 +67,7 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
   hasWeapon,
   cooldowns,
   hpPotions,
+  largeHpPotions,
   mpPotions,
   autoHunt,
   nearbyLootCount,
@@ -75,6 +78,7 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
   onPrimaryAttack,
   onUseSkill,
   onUseHpPotion,
+  onUseLargeHpPotion,
   onUseMpPotion,
   onApproachShop,
   onPickupLoot,
@@ -268,13 +272,14 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
 
               {/* BOTTOM ROW: Quick Potions (Q/E/F) + Skills (Space/1-4) + Classic Embossed Utility Buttons (C/V/K/T/O/B) */}
               <div className="flex items-center justify-between gap-1 sm:gap-2 overflow-x-auto no-scrollbar">
-                {/* QUICK CONSUMABLES & LOOT (Q, E, F) */}
+                {/* QUICK CONSUMABLES & LOOT (Q, Z, E, F) */}
                 <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
                   <button
                     type="button"
+                    data-testid="hud-hp-potion-btn"
                     onClick={onUseHpPotion}
                     className="mu-slot-compact relative w-9 h-9 sm:w-11 sm:h-11 bg-[#0b090c] hover:bg-[#191316] active:scale-95 border-2 border-[#6e5a3e] shadow-[inset_0_2px_6px_rgba(0,0,0,0.9)] flex items-center justify-center cursor-pointer transition-colors"
-                    title="Выпить Красное Зелье HP [Q]"
+                    title="Выпить Красное Зелье ОЗ (+250 HP, быстрый откат 0.45с) [Q]"
                     aria-label="Зелье здоровья Q"
                   >
                     <PotionBottleIcon variant="hp" className="mu-slot-icon-compact w-6 h-6 sm:w-8 sm:h-8" />
@@ -283,6 +288,23 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
                     </span>
                     <span className="absolute bottom-0 left-0.5 font-mono text-[8px] sm:text-[9px] font-bold text-[#d4c4a1]">
                       Q
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    data-testid="hud-large-hp-potion-btn"
+                    onClick={onUseLargeHpPotion}
+                    className="mu-slot-compact relative w-9 h-9 sm:w-11 sm:h-11 bg-[#140b0e] hover:bg-[#241319] active:scale-95 border-2 border-[#b47438] shadow-[inset_0_2px_6px_rgba(0,0,0,0.9)] flex items-center justify-center cursor-pointer transition-colors"
+                    title="Выпить Большое Зелье ОЗ (+500 HP, откат 0.45с) [Z]"
+                    aria-label="Большое зелье здоровья Z"
+                  >
+                    <PotionBottleIcon variant="large_hp" className="mu-slot-icon-compact w-6 h-6 sm:w-8 sm:h-8" />
+                    <span className="absolute top-0 right-0.5 font-mono text-[9px] sm:text-[10px] font-extrabold text-amber-300 drop-shadow-[0_1px_1px_rgba(0,0,0,1)]">
+                      {largeHpPotions}
+                    </span>
+                    <span className="absolute bottom-0 left-0.5 font-mono text-[8px] sm:text-[9px] font-bold text-amber-200">
+                      Z
                     </span>
                   </button>
 

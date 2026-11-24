@@ -15,12 +15,18 @@ import {
   Maximize2,
 } from 'lucide-react';
 import { TERRITORIES, getClassDisplayTitle } from '../game/rules';
-import { getWorldGameTimeSec } from '../game/party';
+import {
+  PARTY_EXP_RANGE_METERS,
+  getWorldGameTimeSec,
+  worldDistanceToMeters,
+} from '../game/party';
 import { getNextGoldenBossSpawnSec } from '../game/worldMonsters';
 import { requestMobileLandscapeFullscreen } from '../utils/mobileOrientation';
 import {
+  ActivePartyState,
   BloodCastleStage,
   PartyChatMessage,
+  PartyInvitePayload,
   PartyMemberState,
   PlayerProgressState,
 } from '../game/types';
@@ -76,11 +82,15 @@ interface HudOverlayProps {
   partyRoomCode: string | null;
   partyConnected: boolean;
   partyMembers: PartyMemberState[];
+  activeParty: ActivePartyState | null;
+  pendingPartyInvite: PartyInvitePayload | null;
   zoneChatMessages: PartyChatMessage[];
   chatInputRef: React.RefObject<HTMLInputElement | null>;
   chatOpen: boolean;
   onSetChatOpen: (open: boolean) => void;
   onSendZoneChat: (text: string) => void;
+  onRespondPartyInvite: (inviteId: string, accept: boolean) => void;
+  onInviteToParty: (targetId: string) => void;
   onRequestTradeWithAlly: (ally: PartyMemberState) => void;
   onOpenPartyModal: () => void;
   onTeleportToAlly: (ally: PartyMemberState) => void;
@@ -102,14 +112,16 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
   bossHpPct,
   bloodCastleInfo,
   partySelfId,
-  partyRoomCode,
   partyConnected,
   partyMembers,
+  activeParty,
+  pendingPartyInvite,
   zoneChatMessages,
   chatInputRef,
   chatOpen,
   onSetChatOpen,
   onSendZoneChat,
+  onRespondPartyInvite,
   onRequestTradeWithAlly,
   onOpenPartyModal,
   onTeleportToAlly,
@@ -269,79 +281,177 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
             )}
           </div>
 
-          {/* Compact Online Party Allies Strip (only when in an active room) */}
-          {partyRoomCode && partyMembers.length > 0 && (
-            <div className="mu-party-compact bg-[#081316]/84 backdrop-blur-sm border border-teal-500/45 px-2 py-1.5 text-[10px] shadow-md max-w-[260px]">
-              <div className="flex items-center justify-between gap-2 mb-1">
+          {/* Incoming Manual Party Invite Banner */}
+          {pendingPartyInvite && (
+            <div
+              data-testid="party-invite-banner"
+              className="bg-[#181224]/95 backdrop-blur-sm border border-amber-400/80 px-2.5 py-2 text-[11px] shadow-[0_0_20px_rgba(251,191,36,0.3)] max-w-[290px]"
+            >
+              <div className="font-bold text-amber-200 leading-snug">
+                🤝 Приглашение в группу от{' '}
+                <span className="text-white">{pendingPartyInvite.fromNickname}</span> (Ур.
+                {pendingPartyInvite.fromLevel})
+              </div>
+              <div className="mt-0.5 text-[10px] text-[#cfc6b8]">
+                Добыча:{' '}
+                <strong className="text-emerald-300">
+                  {pendingPartyInvite.lootMode === 'random' ? '🎲 Случайно' : '✋ Нашедшему'}
+                </strong>{' '}
+                · Опыт в радиусе {PARTY_EXP_RANGE_METERS}м
+              </div>
+              <div className="mt-1.5 flex items-center gap-1.5">
                 <button
                   type="button"
-                  onClick={onOpenPartyModal}
-                  className="flex items-center gap-1 font-bold text-teal-300 hover:text-teal-200 cursor-pointer truncate"
+                  data-testid="party-invite-accept"
+                  onClick={() => onRespondPartyInvite(pendingPartyInvite.inviteId, true)}
+                  className="flex-1 rounded bg-emerald-500 hover:bg-emerald-400 px-2 py-1 text-[10px] font-extrabold text-[#09080c] cursor-pointer"
                 >
-                  <Users className="w-3 h-3 shrink-0" />
-                  <span className="truncate">Группа {partyRoomCode} ({partyMembers.length}/5)</span>
+                  ✓ Принять
                 </button>
-                <span className="text-[9px] font-mono text-teal-300/80 shrink-0">
-                  {partyConnected ? 'ONLINE' : '...'}
-                </span>
-              </div>
-              <div className="space-y-1">
-                {partyMembers.slice(0, 5).map((member) => {
-                  const isSelf = member.id === partySelfId;
-                  const memberHpPct = Math.max(
-                    0,
-                    Math.min(100, (member.hp / Math.max(1, member.maxHp)) * 100)
-                  );
-                  const memberZone = member.inBloodCastle
-                    ? 'Blood Castle'
-                    : TERRITORIES.find((t) => t.id === member.territoryId)?.name ??
-                      member.territoryId;
-                  return (
-                    <div key={member.id} className="flex items-center gap-1.5">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-1 text-[10px]">
-                          <span className="truncate font-semibold text-slate-100">
-                            {isSelf ? '★ ' : ''}
-                            {member.nickname}
-                          </span>
-                          <span className="font-mono text-[9px] text-teal-200/80 shrink-0">
-                            Ур.{member.level}
-                            <span className="mu-top-hide-short"> · {memberZone}</span>
-                          </span>
-                        </div>
-                        <div className="h-1 bg-slate-900 overflow-hidden mt-0.5">
-                          <div
-                            className="h-full bg-emerald-400"
-                            style={{ width: `${memberHpPct}%` }}
-                          />
-                        </div>
-                      </div>
-                      {!isSelf && (
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => onRequestTradeWithAlly(member)}
-                            className="px-1 py-0.5 bg-amber-950/90 hover:bg-amber-800/80 border border-amber-500/50 text-amber-200 cursor-pointer"
-                            title={`Предложить обмен ${member.nickname}`}
-                          >
-                            <Handshake className="w-3 h-3" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onTeleportToAlly(member)}
-                            className="px-1 py-0.5 bg-teal-950/90 hover:bg-teal-800/80 border border-teal-500/50 text-teal-200 cursor-pointer"
-                            title={`Телепорт к ${member.nickname}`}
-                          >
-                            <Compass className="w-3 h-3" />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                <button
+                  type="button"
+                  data-testid="party-invite-decline"
+                  onClick={() => onRespondPartyInvite(pendingPartyInvite.inviteId, false)}
+                  className="flex-1 rounded border border-rose-400/60 bg-rose-950/80 hover:bg-rose-800/80 px-2 py-1 text-[10px] font-bold text-rose-200 cursor-pointer"
+                >
+                  ✕ Отклонить
+                </button>
               </div>
             </div>
           )}
+
+          {/* Compact Formed Party Strip (ONLY shown when player manually joined a party!) */}
+          {activeParty && (() => {
+            const formedPartyMembers = partyMembers.filter((m) =>
+              activeParty.memberIds.includes(m.id)
+            );
+            if (formedPartyMembers.length === 0) return null;
+            const selfMember = formedPartyMembers.find((m) => m.id === partySelfId);
+
+            return (
+              <div
+                data-testid="party-strip"
+                className="mu-party-compact bg-[#081316]/88 backdrop-blur-sm border border-teal-500/45 px-2 py-1.5 text-[10px] shadow-md max-w-[275px]"
+              >
+                <div className="flex items-center justify-between gap-1.5 mb-1">
+                  <button
+                    type="button"
+                    onClick={onOpenPartyModal}
+                    className="flex items-center gap-1 font-bold text-teal-300 hover:text-teal-200 cursor-pointer truncate"
+                  >
+                    <Users className="w-3 h-3 shrink-0" />
+                    <span className="truncate">Группа ({formedPartyMembers.length}/5)</span>
+                  </button>
+                  <span
+                    data-testid="hud-party-loot-mode"
+                    className="rounded border border-amber-400/40 bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-bold text-amber-200 shrink-0"
+                    title="Режим распределения добычи в группе"
+                  >
+                    {activeParty.lootMode === 'random' ? '🎲 Случайно' : '✋ Нашедшему'}
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  {formedPartyMembers.slice(0, 5).map((member) => {
+                    const isSelf = member.id === partySelfId;
+                    const isLeader = member.id === activeParty.leaderId;
+                    const memberHpPct = Math.max(
+                      0,
+                      Math.min(100, (member.hp / Math.max(1, member.maxHp)) * 100)
+                    );
+                    const sameZone =
+                      selfMember !== undefined &&
+                      member.territoryId === selfMember.territoryId &&
+                      Boolean(member.inBloodCastle) === Boolean(selfMember.inBloodCastle);
+                    const distMeters =
+                      !isSelf && sameZone && selfMember
+                        ? Math.round(
+                            worldDistanceToMeters(
+                              member.x - selfMember.x,
+                              member.y - selfMember.y
+                            )
+                          )
+                        : null;
+                    const inExpRange =
+                      distMeters !== null && distMeters <= PARTY_EXP_RANGE_METERS;
+                    const memberZone = member.inBloodCastle
+                      ? 'Blood Castle'
+                      : TERRITORIES.find((t) => t.id === member.territoryId)?.name ??
+                        member.territoryId;
+                    return (
+                      <div key={member.id} className="flex items-center gap-1.5">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-1 text-[10px]">
+                            <span className="truncate font-semibold text-slate-100">
+                              {isLeader ? '👑 ' : isSelf ? '★ ' : ''}
+                              {member.nickname}
+                            </span>
+                            <span className="font-mono text-[9px] shrink-0">
+                              <span className="text-teal-200/85">Ур.{member.level}</span>
+                              {distMeters !== null ? (
+                                <span
+                                  className={
+                                    inExpRange
+                                      ? ' text-emerald-300 font-bold'
+                                      : ' text-slate-400'
+                                  }
+                                  title={
+                                    inExpRange
+                                      ? `В радиусе опыта (<= ${PARTY_EXP_RANGE_METERS}м)`
+                                      : `Далеко для опыта (> ${PARTY_EXP_RANGE_METERS}м)`
+                                  }
+                                >
+                                  {' '}
+                                  · {distMeters}м
+                                </span>
+                              ) : (
+                                !isSelf && (
+                                  <span className="mu-top-hide-short text-slate-400">
+                                    {' '}
+                                    · {memberZone}
+                                  </span>
+                                )
+                              )}
+                            </span>
+                          </div>
+                          <div className="h-1 bg-slate-900 overflow-hidden mt-0.5">
+                            <div
+                              className="h-full bg-emerald-400"
+                              style={{ width: `${memberHpPct}%` }}
+                            />
+                          </div>
+                        </div>
+                        {!isSelf && (
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => onRequestTradeWithAlly(member)}
+                              className="px-1 py-0.5 bg-amber-950/90 hover:bg-amber-800/80 border border-amber-500/50 text-amber-200 cursor-pointer"
+                              title={`Предложить обмен ${member.nickname}`}
+                            >
+                              <Handshake className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onTeleportToAlly(member)}
+                              className="px-1 py-0.5 bg-teal-950/90 hover:bg-teal-800/80 border border-teal-500/50 text-teal-200 cursor-pointer"
+                              title={`Телепорт к ${member.nickname}`}
+                            >
+                              <Compass className="w-3 h-3" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                {!partyConnected && (
+                  <div className="mt-1 text-[9px] font-mono text-amber-300">
+                    Переподключение...
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         {/* TOP-CENTER: Boss HP Bar or Blood Castle 3-Minute Event Tracker */}

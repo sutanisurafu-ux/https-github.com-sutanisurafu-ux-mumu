@@ -1535,3 +1535,211 @@ test('SQLite accounts start with 0 characters, enforce server-wide unique names 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('Manual party rules: no auto-party, 125m EXP sharing & proximity audio boundaries, server ground loot with finder/random mode, and HP/Large HP potion rebalance', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const {
+    MAX_WORLD_PLAYERS,
+    PARTY_EXP_RANGE_METERS,
+    SOUND_HEARING_RANGE_METERS,
+    WORLD_UNITS_PER_METER,
+    getEligiblePartyExpRecipients,
+    isSoundAudibleAt,
+    resolvePartyLootRecipient,
+    sanitizePartyLootMode,
+    worldDistanceToMeters,
+  } = await import('./party');
+  const { generateMonsterGroundDrops } = await import('./rules');
+  const { CHARACTER_SCALING } = await import('../config/characterScaling');
+  const { GameDatabase } = await import('../../server/db');
+
+  // 1. Constants & meter scale
+  assert.equal(MAX_WORLD_PLAYERS, 64);
+  assert.equal(WORLD_UNITS_PER_METER, 10);
+  assert.equal(PARTY_EXP_RANGE_METERS, 125);
+  assert.equal(SOUND_HEARING_RANGE_METERS, 125);
+  assert.equal(worldDistanceToMeters(1250, 0), 125);
+  assert.equal(sanitizePartyLootMode('random'), 'random');
+  assert.equal(sanitizePartyLootMode('finder'), 'finder');
+  assert.equal(sanitizePartyLootMode('invalid'), 'finder');
+
+  // 2. Manual party & 125m EXP sharing boundary
+  const makeMember = (id: string, x: number, y: number, territoryId: 'lorencia' | 'devias' = 'lorencia') => ({
+    id,
+    nickname: id,
+    roomCode: 'MU-1',
+    partyId: null as string | null,
+    classId: 'dark_knight' as const,
+    classTier: 1 as const,
+    level: 20,
+    resets: 0,
+    hp: 400,
+    maxHp: 400,
+    mp: 100,
+    maxMp: 100,
+    territoryId,
+    inBloodCastle: false,
+    x,
+    y,
+    facingAngle: 0,
+    walkDistance: 0,
+    hasWeapon: true,
+    hasWings: false,
+    activeSkillPattern: null,
+    activeSkillColor: '#f59e0b',
+    activeSkillTimestamp: 0,
+    lastUpdatedAt: 1_700_000_000_000,
+  });
+
+  const killer = makeMember('p_killer', 0, 0);
+  const closeAlly = makeMember('p_close', 1250, 0); // exactly 125m -> INCLUDED
+  const farAlly = makeMember('p_far', 1260, 0); // 126m -> EXCLUDED
+  const otherZoneAlly = makeMember('p_other_zone', 10, 10, 'devias'); // different map -> EXCLUDED
+  const outsiderClose = makeMember('p_outsider', 100, 0); // 10m away, NOT in party -> EXCLUDED
+  const allMembers = [killer, closeAlly, farAlly, otherZoneAlly, outsiderClose];
+
+  // Solo (party = null): even though other players are 10m away in the same channel, NO auto-party EXP sharing!
+  const soloExp = getEligiblePartyExpRecipients(null, allMembers, killer.id, PARTY_EXP_RANGE_METERS);
+  assert.deepEqual(soloExp.recipientIds, ['p_killer']);
+  assert.equal(soloExp.nearbyAlliesCount, 0);
+
+  // Formed party containing killer + closeAlly + farAlly + otherZoneAlly (NOT outsiderClose)
+  const formedParty = {
+    partyId: 'pty_1',
+    leaderId: 'p_killer',
+    memberIds: ['p_killer', 'p_close', 'p_far', 'p_other_zone'],
+    lootMode: 'finder' as const,
+  };
+  const partyExp = getEligiblePartyExpRecipients(
+    formedParty,
+    allMembers,
+    killer.id,
+    PARTY_EXP_RANGE_METERS
+  );
+  assert.deepEqual(partyExp.recipientIds, ['p_killer', 'p_close']);
+  assert.equal(partyExp.nearbyAlliesCount, 1);
+
+  // 3. 125m proximity audio boundary
+  assert.equal(isSoundAudibleAt(0, 0, 1250, 0), true, 'Exactly 125m must be audible');
+  assert.equal(isSoundAudibleAt(0, 0, 1251, 0), false, '125.1m must be silent');
+  assert.equal(isSoundAudibleAt(100, 100, 100, 100), true, '0m must be audible');
+
+  // 4. Server ground loot generation & party loot mode ('finder' vs 'random')
+  const serverDrops = generateMonsterGroundDrops({
+    classId: 'dark_knight',
+    territoryId: 'lorencia',
+    inBloodCastle: false,
+    dropX: 500,
+    dropY: 400,
+    isBoss: true,
+    zenReward: 120,
+    isQuestMonster: false,
+    allowQuestItem: false,
+    nowMs: 1_700_000_000_000,
+    rng: () => 0.1,
+  });
+  assert.ok(serverDrops.length >= 2, 'Boss kill should generate multiple server-authoritative ground drops');
+  assert.ok(serverDrops.some((d) => d.type === 'zen'), 'Should include a Zen pile');
+
+  // 'finder' mode always awards to picker
+  const finderWinner = resolvePartyLootRecipient(
+    formedParty,
+    allMembers,
+    'p_close',
+    500,
+    0,
+    'lorencia',
+    false,
+    () => 0.0,
+    PARTY_EXP_RANGE_METERS
+  );
+  assert.equal(finderWinner, 'p_close');
+
+  // 'random' mode picks uniformly among party members in same zone within 125m of drop (drop at 0,0 -> p_killer & p_close eligible; p_far at 1260 excluded; p_other_zone excluded)
+  const randomParty = { ...formedParty, lootMode: 'random' as const };
+  const randWinner0 = resolvePartyLootRecipient(
+    randomParty,
+    allMembers,
+    'p_close',
+    0,
+    0,
+    'lorencia',
+    false,
+    () => 0.01,
+    PARTY_EXP_RANGE_METERS
+  );
+  assert.equal(randWinner0, 'p_killer');
+
+  const randWinner1 = resolvePartyLootRecipient(
+    randomParty,
+    allMembers,
+    'p_killer',
+    0,
+    0,
+    'lorencia',
+    false,
+    () => 0.99,
+    PARTY_EXP_RANGE_METERS
+  );
+  assert.equal(randWinner1, 'p_close');
+
+  // 5. HP & Large HP potion rebalance (250 HP / 500 HP, 0.45s fast cooldown, 10x price)
+  assert.equal(CHARACTER_SCALING.potions.smallHpHeal, 250);
+  assert.equal(CHARACTER_SCALING.potions.largeHpHeal, 500);
+  assert.equal(CHARACTER_SCALING.potions.hpCooldownSec, 0.45);
+  assert.equal(
+    CHARACTER_SCALING.potions.largeHpUnitPrice,
+    CHARACTER_SCALING.potions.smallHpUnitPrice * 10
+  );
+
+  const shopper = { ...createInitialPlayerState('dark_knight'), zen: 15_000 };
+  assert.equal(shopper.largeHpPotions, 0);
+
+  const buySmall = buyPotionsWithZen(shopper, 'hp', 5, true);
+  assert.equal(buySmall.success, true);
+  assert.equal(buySmall.nextState.zen, 15_000 - 250);
+  assert.equal(buySmall.nextState.hpPotions, shopper.hpPotions + 5);
+
+  const buyLarge5 = buyPotionsWithZen(buySmall.nextState, 'large_hp', 5, true);
+  assert.equal(buyLarge5.success, true);
+  assert.equal(buyLarge5.nextState.zen, 14_750 - 2500);
+  assert.equal(buyLarge5.nextState.largeHpPotions, 5);
+
+  const buyLarge20 = buyPotionsWithZen(buyLarge5.nextState, 'large_hp', 20, true);
+  assert.equal(buyLarge20.success, true);
+  assert.equal(buyLarge20.nextState.zen, 12_250 - 9000);
+  assert.equal(buyLarge20.nextState.largeHpPotions, 25);
+
+  // 6. SQLite GameDatabase round-trip persistence for largeHpPotions
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mu-large-pot-db-'));
+  const dbPath = path.join(tmpDir, 'test-pots.sqlite');
+  const db = new GameDatabase(dbPath);
+  try {
+    const acc = db.createAccount();
+    const created = db.createCharacterForAccount({
+      accountId: acc.accountId,
+      nickname: 'PotionTester',
+      classId: 'dark_knight',
+    });
+    assert.equal(created.status, 'ok');
+    assert.equal(created.record.player.largeHpPotions, 0);
+
+    const saved = db.updateCharacterForAccount({
+      characterId: created.record.id,
+      accountId: acc.accountId,
+      player: { ...created.record.player, hpPotions: 17, largeHpPotions: 25 },
+    });
+    assert.equal(saved.status, 'ok');
+
+    const loaded = db.getCharacterForAccount(created.record.id, acc.accountId);
+    assert.equal(loaded.status, 'ok');
+    assert.equal(loaded.record.player.hpPotions, 17);
+    assert.equal(loaded.record.player.largeHpPotions, 25);
+  } finally {
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+

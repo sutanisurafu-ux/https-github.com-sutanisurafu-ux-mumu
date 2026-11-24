@@ -11,9 +11,11 @@ import {
   ClassTier,
   DerivedStats,
   EquipmentItem,
+  GROUND_LOOT_TTL_MS,
   HuntingCampDefinition,
   ItemRarity,
   ItemSlot,
+  LootDrop,
   MapFenceLine,
   MapRiverStream,
   MapSceneryProp,
@@ -898,6 +900,7 @@ export function createInitialPlayerState(classId: CharacterClassId = 'dark_knigh
     jewels: { ...init.startJewels },
     potions: init.startHpPotions,
     hpPotions: init.startHpPotions,
+    largeHpPotions: init.startLargeHpPotions,
     mpPotions: init.startMpPotions,
     hasFirstProfQuestItem: false,
     bloodScrolls: 0,
@@ -1220,7 +1223,7 @@ export function buyStarterEquipmentWithZen(
 
 export function buyPotionsWithZen(
   state: PlayerProgressState,
-  potionType: 'hp' | 'mp',
+  potionType: 'hp' | 'large_hp' | 'mp',
   packSize: 5 | 20 = 5,
   isNearShop = true
 ): { nextState: PlayerProgressState; success: boolean; message: string } {
@@ -1232,7 +1235,13 @@ export function buyPotionsWithZen(
     };
   }
 
-  const unitPrice = potionType === 'hp' ? 50 : 40;
+  const potCfg = CHARACTER_SCALING.potions;
+  const unitPrice =
+    potionType === 'large_hp'
+      ? potCfg.largeHpUnitPrice
+      : potionType === 'hp'
+        ? potCfg.smallHpUnitPrice
+        : potCfg.mpUnitPrice;
   const cost = packSize === 20 ? Math.round(unitPrice * 20 * 0.9) : unitPrice * packSize;
 
   if (state.zen < cost) {
@@ -1240,6 +1249,19 @@ export function buyPotionsWithZen(
       nextState: state,
       success: false,
       message: `Недостаточно золота! Для покупки ${packSize} шт. требуется ${cost} Zen (у вас ${state.zen} Zen).`,
+    };
+  }
+
+  if (potionType === 'large_hp') {
+    const nextLargeHpPotions = (state.largeHpPotions ?? 0) + packSize;
+    return {
+      nextState: {
+        ...state,
+        zen: state.zen - cost,
+        largeHpPotions: nextLargeHpPotions,
+      },
+      success: true,
+      message: `Куплено +${packSize} Больших Банок ОЗ (+${potCfg.largeHpHeal} HP) за ${cost} Zen (всего: ${nextLargeHpPotions} шт.).`,
     };
   }
 
@@ -1253,7 +1275,7 @@ export function buyPotionsWithZen(
         potions: nextHpPotions,
       },
       success: true,
-      message: `Куплено +${packSize} Банок ОЗ за ${cost} Zen (всего: ${nextHpPotions} шт.).`,
+      message: `Куплено +${packSize} Банок ОЗ (+${potCfg.smallHpHeal} HP) за ${cost} Zen (всего: ${nextHpPotions} шт.).`,
     };
   }
 
@@ -2139,6 +2161,163 @@ export function rollBloodCastleMaterialDrop(
   if (scaledRoll < bcMat.regularScrollMax) return 'blood_scroll';
   if (scaledRoll < bcMat.regularFangMax) return 'blood_fang';
   return null;
+}
+
+/**
+ * Generates server-authoritative shared ground loot drops when a monster dies.
+ * Used on `server.ts` so every player in the zone sees the exact same ground drops
+ * (and also reused as the offline single-player fallback).
+ */
+export function generateMonsterGroundDrops(params: {
+  classId: CharacterClassId;
+  territoryId: TerritoryId;
+  inBloodCastle: boolean;
+  dropX: number;
+  dropY: number;
+  isBoss: boolean;
+  zenReward: number;
+  isQuestMonster?: boolean;
+  allowQuestItem?: boolean;
+  nowMs?: number;
+  rng?: () => number;
+}): LootDrop[] {
+  const rng = params.rng ?? Math.random;
+  const nowWall = params.nowMs ?? Date.now();
+  const expiresAtMs = nowWall + GROUND_LOOT_TTL_MS;
+  const territoryIdx = Math.max(
+    0,
+    TERRITORIES.findIndex((t) => t.id === params.territoryId)
+  );
+  const territory = TERRITORIES[territoryIdx] ?? TERRITORIES[0];
+  const dropRateMult = SERVER_CONFIG.rates.dropChanceMultiplier;
+  const drops: LootDrop[] = [];
+  const uid = () => Math.floor(rng() * 1_000_000).toString(36);
+
+  if (params.inBloodCastle) {
+    if (rng() < Math.min(1, DROP_RATES.zen.bloodCastleMonsterChance * dropRateMult)) {
+      drops.push({
+        id: `srv_zen_${nowWall}_${uid()}`,
+        type: 'zen',
+        label: `${params.zenReward} Zen`,
+        x: Math.round(params.dropX + (rng() * 24 - 12)),
+        y: Math.round(params.dropY + (rng() * 24 - 12)),
+        amount: Math.max(1, Math.round(params.zenReward)),
+        rarityColor: '#facc15',
+        spawnTime: nowWall,
+        expiresAtMs,
+      });
+    }
+    return drops;
+  }
+
+  if (
+    (params.isBoss && DROP_RATES.zen.bossGuaranteed) ||
+    rng() < Math.min(1, DROP_RATES.zen.regularMonsterChance * dropRateMult)
+  ) {
+    drops.push({
+      id: `srv_zen_${nowWall}_${uid()}`,
+      type: 'zen',
+      label: `${params.zenReward} Zen`,
+      x: Math.round(params.dropX + (rng() * 28 - 14)),
+      y: Math.round(params.dropY + (rng() * 28 - 14)),
+      amount: Math.max(1, Math.round(params.zenReward)),
+      rarityColor: '#facc15',
+      spawnTime: nowWall,
+      expiresAtMs,
+    });
+  }
+
+  const jType = rollJewelDropType(territory.recommendedLevel, params.isBoss, rng());
+  if (jType) {
+    const jLabel =
+      jType === 'jewel_bless'
+        ? 'Jewel of Bless'
+        : jType === 'jewel_soul'
+          ? 'Jewel of Soul'
+          : jType === 'jewel_life'
+            ? 'Jewel of Life'
+            : 'Jewel of Chaos';
+    drops.push({
+      id: `srv_jewel_${nowWall}_${uid()}`,
+      type: jType,
+      label: jLabel,
+      x: Math.round(params.dropX + (rng() * 36 - 18)),
+      y: Math.round(params.dropY + (rng() * 36 - 18)),
+      rarityColor: jType === 'jewel_life' ? '#34d399' : '#fbbf24',
+      spawnTime: nowWall,
+      expiresAtMs,
+    });
+  }
+
+  const bcMat = rollBloodCastleMaterialDrop(params.isBoss, rng());
+  if (bcMat) {
+    const matLabel =
+      bcMat === 'blood_scroll'
+        ? '📜 Blood Scroll (Свиток Архангела)'
+        : '🦴 Blood Fang (Клык Крови)';
+    drops.push({
+      id: `srv_bc_${nowWall}_${uid()}`,
+      type: bcMat,
+      label: matLabel,
+      x: Math.round(params.dropX + (rng() * 36 - 18)),
+      y: Math.round(params.dropY + (rng() * 36 - 18)),
+      rarityColor: '#fb7185',
+      spawnTime: nowWall,
+      expiresAtMs,
+    });
+  }
+
+  const equipChance = params.isBoss
+    ? DROP_RATES.equipment.bossChance
+    : Math.min(1, DROP_RATES.equipment.regularMonsterChance * dropRateMult);
+  const equipDropCount = params.isBoss ? DROP_RATES.equipment.bossRareDropCount : 1;
+  for (let dropIdx = 0; dropIdx < equipDropCount; dropIdx++) {
+    if (!params.isBoss && rng() >= equipChance) continue;
+    if (params.isBoss && dropIdx === 0 && rng() >= equipChance) continue;
+    const eq = generateEquipmentDrop(params.classId, territoryIdx, params.isBoss);
+    const eqColor =
+      eq.rarity === 'ancient'
+        ? '#f59e0b'
+        : eq.rarity === 'excellent'
+          ? '#34d399'
+          : eq.rarity === 'magic'
+            ? '#38bdf8'
+            : '#e7e5e4';
+    const angle = dropIdx * 2.4 + rng() * 0.8;
+    const spreadDist = params.isBoss ? 26 + dropIdx * 18 : 16;
+    const lx = Math.round(params.dropX + Math.cos(angle) * spreadDist);
+    const ly = Math.round(params.dropY + Math.sin(angle) * spreadDist);
+    drops.push({
+      id: `srv_eq_${eq.id}_${dropIdx}_${uid()}`,
+      type: 'equipment',
+      label: `${eq.name} +${eq.level}`,
+      x: lx,
+      y: ly,
+      equipment: eq,
+      rarityColor: eqColor,
+      spawnTime: nowWall,
+      expiresAtMs,
+    });
+  }
+
+  const questDropChance = params.isBoss
+    ? DROP_RATES.firstProfessionQuestItem.bossChance
+    : Math.min(1, DROP_RATES.firstProfessionQuestItem.questMonsterChance * dropRateMult);
+  if (params.isQuestMonster && params.allowQuestItem && rng() < questDropChance) {
+    const qName = getFirstProfQuestItemName(params.classId);
+    drops.push({
+      id: `srv_quest_${nowWall}_${uid()}`,
+      type: 'quest_item',
+      label: `★ КВЕСТ: ${qName}`,
+      x: Math.round(params.dropX),
+      y: Math.round(params.dropY - 12),
+      rarityColor: '#f59e0b',
+      spawnTime: nowWall,
+      expiresAtMs,
+    });
+  }
+
+  return drops;
 }
 
 /**

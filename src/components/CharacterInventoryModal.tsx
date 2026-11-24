@@ -32,7 +32,7 @@ interface CharacterInventoryModalProps {
   onDropInventoryItem: (item: EquipmentItem) => string;
   onDropEquippedSlot: (slot: ItemSlot) => string;
   onUpgradeWithJewel: (itemId: string, jewel: 'bless' | 'soul' | 'life') => string;
-  onBuyPotions: (potionType: 'hp' | 'mp', packSize: 5 | 20) => string;
+  onBuyPotions: (potionType: 'hp' | 'large_hp' | 'mp', packSize: 5 | 20) => string;
   onBuySkillBook: (skillId: string) => string;
   onBuyShopEquipment: (catalogId: string) => string;
 }
@@ -182,7 +182,7 @@ const SlotSvgIcon: React.FC<{ slot: ItemSlot; rarity?: ItemRarity; className?: s
 };
 
 const JewelSvgIcon: React.FC<{
-  jewel: 'bless' | 'soul' | 'life' | 'chaos' | 'potion_hp' | 'potion_mp' | 'quest';
+  jewel: 'bless' | 'soul' | 'life' | 'chaos' | 'potion_hp' | 'potion_large_hp' | 'potion_mp' | 'quest';
 }> = ({ jewel }) => {
   const colorMap = {
     bless: { fill: '#c084fc', stroke: '#fde047' },
@@ -190,10 +190,27 @@ const JewelSvgIcon: React.FC<{
     life: { fill: '#fbbf24', stroke: '#fef08a' },
     chaos: { fill: '#34d399', stroke: '#fde047' },
     potion_hp: { fill: '#f43f5e', stroke: '#fecdd3' },
+    potion_large_hp: { fill: '#dc2626', stroke: '#fde047' },
     potion_mp: { fill: '#38bdf8', stroke: '#bae6fd' },
     quest: { fill: '#f59e0b', stroke: '#fef08a' },
   };
   const c = colorMap[jewel];
+
+  if (jewel === 'potion_large_hp') {
+    return (
+      <svg viewBox="0 0 32 32" className="h-7 w-7" aria-hidden="true">
+        <rect x="12" y="3" width="8" height="4" rx="1" fill="#f59e0b" />
+        <path
+          d="M11 7 L21 7 L22 11 L26 19 C27 24 23 28 16 28 C9 28 5 24 6 19 L10 11 Z"
+          fill={c.fill}
+          fillOpacity="0.65"
+          stroke={c.stroke}
+          strokeWidth="2"
+        />
+        <path d="M16 15 L16 23 M12 19 L20 19" stroke="#fef08a" strokeWidth="2.2" strokeLinecap="round" />
+      </svg>
+    );
+  }
 
   if (jewel === 'potion_hp' || jewel === 'potion_mp') {
     return (
@@ -288,6 +305,7 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
         desc: string;
       }
     | { type: 'potion_hp_stack'; count: number }
+    | { type: 'potion_large_hp_stack'; count: number }
     | { type: 'potion_mp_stack'; count: number }
     | { type: 'quest_item_cell'; hasItem: boolean; name: string }
     | { type: 'equipment'; item: EquipmentItem }
@@ -326,6 +344,10 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
   gridCells.push({
     type: 'potion_hp_stack',
     count: player.hpPotions,
+  });
+  gridCells.push({
+    type: 'potion_large_hp_stack',
+    count: player.largeHpPotions ?? 0,
   });
   gridCells.push({
     type: 'potion_mp_stack',
@@ -690,7 +712,7 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
               </h2>
             </div>
             <p className="mt-0.5 font-mono-num text-[11px] text-[#bfb5a4]">
-              АТК {derived.minDamage}–{derived.maxDamage} · ЗАЩ {derived.defense} · ОЗ🧪{player.hpPotions} · МН💧{player.mpPotions} · 📜Scroll {player.bloodScrolls} · 🦷Fang {player.bloodFangs} · 🎟️Билет BC {player.bloodCastleTickets}
+              АТК {derived.minDamage}–{derived.maxDamage} · ЗАЩ {derived.defense} · ОЗ🧪{player.hpPotions} · Б.ОЗ🍷{player.largeHpPotions ?? 0} · МН💧{player.mpPotions} · 📜Scroll {player.bloodScrolls} · 🦷Fang {player.bloodFangs} · 🎟️Билет BC {player.bloodCastleTickets}
             </p>
           </div>
           <button
@@ -880,12 +902,47 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
                       onMouseLeave={() => setHoverTooltip(null)}
                       role="gridcell"
                       tabIndex={0}
-                      aria-label={`Стак Банок ОЗ: ${cell.count} шт.`}
+                      aria-label={`Стак Банок ОЗ (+250): ${cell.count} шт.`}
                       className="relative flex h-14 flex-col items-center justify-center rounded-lg border border-rose-500/45 bg-[#1b121a] p-1 select-none hover:border-rose-400"
                     >
                       <JewelSvgIcon jewel="potion_hp" />
                       <span className="mt-0.5 text-[9px] font-bold text-rose-200">БАНКИ ОЗ</span>
                       <span className="absolute right-1 top-1 rounded bg-black/80 px-1 font-mono-num text-[10px] font-extrabold text-rose-300">
+                        ×{cell.count}
+                      </span>
+                    </div>
+                  );
+                }
+
+                if (cell.type === 'potion_large_hp_stack') {
+                  return (
+                    <div
+                      key="potion_large_hp_stack"
+                      data-testid="inventory-large-hp-stack"
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => handleDropOnGridCell(cell, e)}
+                      onMouseEnter={(e) =>
+                        setHoverTooltip({
+                          target: {
+                            kind: 'potion',
+                            potionType: 'large_hp',
+                            count: cell.count,
+                            context: 'inventory',
+                          },
+                          clientX: e.clientX,
+                          clientY: e.clientY,
+                        })
+                      }
+                      onMouseMove={updateTooltipCoords}
+                      onMouseLeave={() => setHoverTooltip(null)}
+                      role="gridcell"
+                      tabIndex={0}
+                      aria-label={`Стак Больших Банок ОЗ (+500): ${cell.count} шт.`}
+                      className="relative flex h-14 flex-col items-center justify-center rounded-lg border border-amber-400/60 bg-gradient-to-b from-[#28131a] to-[#170e15] p-1 select-none hover:border-amber-300"
+                    >
+                      <JewelSvgIcon jewel="potion_large_hp" />
+                      <span className="mt-0.5 text-[9px] font-bold text-amber-200">БОЛ. ОЗ</span>
+                      <span className="absolute right-1 top-1 rounded bg-black/80 px-1 font-mono-num text-[10px] font-extrabold text-amber-300">
                         ×{cell.count}
                       </span>
                     </div>

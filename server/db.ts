@@ -162,6 +162,7 @@ export function sanitizePlayerProgressForDb(raw: unknown): PlayerProgressState {
   };
 
   const hpPotions = clampPositiveInt(obj.hpPotions ?? obj.potions, base.hpPotions, 9999);
+  const largeHpPotions = clampPositiveInt(obj.largeHpPotions, base.largeHpPotions, 9999);
   const mpPotions = clampPositiveInt(obj.mpPotions, base.mpPotions, 9999);
 
   const learnedSkills: string[] = [];
@@ -223,6 +224,7 @@ export function sanitizePlayerProgressForDb(raw: unknown): PlayerProgressState {
     jewels,
     potions: hpPotions,
     hpPotions,
+    largeHpPotions,
     mpPotions,
     hasFirstProfQuestItem: Boolean(obj.hasFirstProfQuestItem),
     bloodScrolls: clampPositiveInt(obj.bloodScrolls, 0, 99_999),
@@ -265,6 +267,7 @@ interface CharacterDbRow {
   jewel_life: number;
   jewel_chaos: number;
   hp_potions: number;
+  large_hp_potions?: number;
   mp_potions: number;
   has_first_prof_quest_item: number;
   blood_scrolls: number;
@@ -358,6 +361,7 @@ export class GameDatabase {
         jewel_life INTEGER NOT NULL DEFAULT 1,
         jewel_chaos INTEGER NOT NULL DEFAULT 0,
         hp_potions INTEGER NOT NULL DEFAULT 3,
+        large_hp_potions INTEGER NOT NULL DEFAULT 0,
         mp_potions INTEGER NOT NULL DEFAULT 3,
         has_first_prof_quest_item INTEGER NOT NULL DEFAULT 0,
         blood_scrolls INTEGER NOT NULL DEFAULT 0,
@@ -453,6 +457,9 @@ export class GameDatabase {
     }
     if (!cols.has('current_mp')) {
       this.db.exec('ALTER TABLE characters ADD COLUMN current_mp INTEGER NOT NULL DEFAULT 0;');
+    }
+    if (!cols.has('large_hp_potions')) {
+      this.db.exec('ALTER TABLE characters ADD COLUMN large_hp_potions INTEGER NOT NULL DEFAULT 0;');
     }
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_characters_account ON characters (account_id);');
 
@@ -635,6 +642,7 @@ export class GameDatabase {
       },
       potions: row.hp_potions,
       hpPotions: row.hp_potions,
+      largeHpPotions: Math.max(0, Number(row.large_hp_potions ?? 0)),
       mpPotions: row.mp_potions,
       hasFirstProfQuestItem: Boolean(row.has_first_prof_quest_item),
       bloodScrolls: row.blood_scrolls,
@@ -789,7 +797,7 @@ export class GameDatabase {
               id, account_id, nickname, class_id, class_tier, level, resets, exp, exp_to_next, stat_points,
               str, agi, vit, ene, zen,
               jewel_bless, jewel_soul, jewel_life, jewel_chaos,
-              hp_potions, mp_potions, has_first_prof_quest_item,
+              hp_potions, large_hp_potions, mp_potions, has_first_prof_quest_item,
               blood_scrolls, blood_fangs, blood_castle_tickets, in_blood_castle, blood_castle_clears,
               territory_id, pos_x, pos_y, current_hp, current_mp,
               kills_in_territory, total_kills, bosses_defeated, highest_reached_territory_idx,
@@ -798,7 +806,7 @@ export class GameDatabase {
               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?,
               ?, ?, ?, ?,
-              ?, ?, ?,
+              ?, ?, ?, ?,
               ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?,
               ?, ?, ?, ?,
@@ -826,6 +834,7 @@ export class GameDatabase {
             initialPlayer.jewels.life,
             initialPlayer.jewels.chaos,
             initialPlayer.hpPotions,
+            initialPlayer.largeHpPotions,
             initialPlayer.mpPotions,
             0,
             0,
@@ -944,7 +953,7 @@ export class GameDatabase {
             exp = ?, exp_to_next = ?, stat_points = ?,
             str = ?, agi = ?, vit = ?, ene = ?, zen = ?,
             jewel_bless = ?, jewel_soul = ?, jewel_life = ?, jewel_chaos = ?,
-            hp_potions = ?, mp_potions = ?, has_first_prof_quest_item = ?,
+            hp_potions = ?, large_hp_potions = ?, mp_potions = ?, has_first_prof_quest_item = ?,
             blood_scrolls = ?, blood_fangs = ?, blood_castle_tickets = ?,
             in_blood_castle = ?, blood_castle_clears = ?,
             territory_id = ?, pos_x = ?, pos_y = ?, current_hp = ?, current_mp = ?,
@@ -971,6 +980,7 @@ export class GameDatabase {
           player.jewels.life,
           player.jewels.chaos,
           player.hpPotions,
+          player.largeHpPotions,
           player.mpPotions,
           player.hasFirstProfQuestItem ? 1 : 0,
           player.bloodScrolls,
@@ -1092,7 +1102,7 @@ export class GameDatabase {
             id, account_id, nickname, class_id, class_tier, level, resets, exp, exp_to_next, stat_points,
             str, agi, vit, ene, zen,
             jewel_bless, jewel_soul, jewel_life, jewel_chaos,
-            hp_potions, mp_potions, has_first_prof_quest_item,
+            hp_potions, large_hp_potions, mp_potions, has_first_prof_quest_item,
             blood_scrolls, blood_fangs, blood_castle_tickets, in_blood_castle, blood_castle_clears,
             territory_id, pos_x, pos_y, current_hp, current_mp,
             kills_in_territory, total_kills, bosses_defeated, highest_reached_territory_idx,
@@ -1101,7 +1111,7 @@ export class GameDatabase {
             ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?,
-            ?, ?, ?,
+            ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
             ?, 0, 220, 0, 0,
             ?, ?, ?, ?,
@@ -1128,6 +1138,7 @@ export class GameDatabase {
           player.jewels.life,
           player.jewels.chaos,
           player.hpPotions,
+          player.largeHpPotions,
           player.mpPotions,
           player.hasFirstProfQuestItem ? 1 : 0,
           player.bloodScrolls,
@@ -1227,7 +1238,7 @@ export class GameDatabase {
             exp = ?, exp_to_next = ?, stat_points = ?,
             str = ?, agi = ?, vit = ?, ene = ?, zen = ?,
             jewel_bless = ?, jewel_soul = ?, jewel_life = ?, jewel_chaos = ?,
-            hp_potions = ?, mp_potions = ?, has_first_prof_quest_item = ?,
+            hp_potions = ?, large_hp_potions = ?, mp_potions = ?, has_first_prof_quest_item = ?,
             blood_scrolls = ?, blood_fangs = ?, blood_castle_tickets = ?,
             in_blood_castle = ?, blood_castle_clears = ?,
             territory_id = ?, kills_in_territory = ?, total_kills = ?,
@@ -1254,6 +1265,7 @@ export class GameDatabase {
           player.jewels.life,
           player.jewels.chaos,
           player.hpPotions,
+          player.largeHpPotions,
           player.mpPotions,
           player.hasFirstProfQuestItem ? 1 : 0,
           player.bloodScrolls,

@@ -14,12 +14,16 @@ import {
   DEFAULT_PARTY_ROOM,
   INDIVIDUAL_MONSTER_RESPAWN_SEC,
   MAX_PARTY_SIZE,
+  MAX_WORLD_PLAYERS,
+  PARTY_EXP_RANGE_METERS,
   clampCoord,
   clampPositiveInt,
   electZoneHostId,
+  getEligiblePartyExpRecipients,
   getPartyZoneKey,
   getWorldGameTimeSec,
   isGroundLootExpired,
+  resolvePartyLootRecipient,
   sanitizeBloodCastleStage,
   sanitizeClassId,
   sanitizeClassTier,
@@ -29,12 +33,14 @@ import {
   sanitizeHitEnemyIds,
   sanitizePartyChatText,
   sanitizePartyCode,
+  sanitizePartyLootMode,
   sanitizePlayerNickname,
   sanitizeSharedMonsterList,
   sanitizeSkillPattern,
   sanitizeTerritoryId,
   sanitizeTradeSideOffer,
 } from './src/game/party.ts';
+import { generateMonsterGroundDrops } from './src/game/rules.ts';
 import {
   ServerMonsterUnit,
   ServerSimPlayerTarget,
@@ -49,9 +55,11 @@ import {
   toSharedMonsterState,
 } from './src/game/worldMonsters.ts';
 import type {
+  ActivePartyState,
   LootDrop,
   PartyAttackEvent,
   PartyChatMessage,
+  PartyInvitePayload,
   PartyKillShareEvent,
   PartyMemberState,
   PartyZoneMonsterSnapshot,
@@ -82,6 +90,9 @@ interface PartyRoom {
   code: string;
   members: Map<string, PartyMemberState>;
   connections: Map<string, ClientConnection>;
+  parties: Map<string, ActivePartyState>;
+  memberToPartyId: Map<string, string>;
+  pendingInvites: Map<string, PartyInvitePayload & { targetId: string }>;
   chatHistory: PartyChatMessage[];
   zoneSnapshots: Map<string, PartyZoneMonsterSnapshot>;
   zoneWorldMonsters: Map<TerritoryId, Map<string, ServerMonsterUnit>>;
@@ -321,6 +332,9 @@ function getOrCreateRoom(code: string): PartyRoom {
       code,
       members: new Map(),
       connections: new Map(),
+      parties: new Map(),
+      memberToPartyId: new Map(),
+      pendingInvites: new Map(),
       chatHistory: [],
       zoneSnapshots: new Map(),
       zoneWorldMonsters: new Map(),
@@ -454,6 +468,111 @@ function persistClientRuntimeVitals(client: ClientConnection, room: PartyRoom): 
   }
 }
 
+function getPartyForMember(room: PartyRoom, memberId: string): ActivePartyState | null {
+  const partyId = room.memberToPartyId.get(memberId);
+  if (!partyId) return null;
+  return room.parties.get(partyId) ?? null;
+}
+
+function sendPartySystemNotice(
+  room: PartyRoom,
+  memberIds: Iterable<string>,
+  text: string,
+  nowMs = Date.now()
+): void {
+  const sysMsg: PartyChatMessage = {
+    id: `sys_pty_${nowMs}_${crypto.randomBytes(3).toString('hex')}`,
+    senderId: 'system',
+    nickname: 'Группа',
+    classId: 'dark_knight',
+    text,
+    timestamp: nowMs,
+    isSystem: true,
+  };
+  for (const id of memberIds) {
+    const conn = room.connections.get(id);
+    if (conn) {
+      sendJson(conn.ws, {
+        type: 'party:chat_message',
+        message: sysMsg,
+      });
+    }
+  }
+}
+
+function syncPartyGroupUpdate(
+  room: PartyRoom,
+  affectedMemberIds: Iterable<string>,
+  party: ActivePartyState | null
+): void {
+  for (const id of affectedMemberIds) {
+    const m = room.members.get(id);
+    if (m) {
+      m.partyId = party && party.memberIds.includes(id) ? party.partyId : null;
+      broadcastToRoom(room, { type: 'party:member_updated', member: m }, id);
+    }
+    const conn = room.connections.get(id);
+    if (conn) {
+      sendJson(conn.ws, {
+        type: 'party:group_updated',
+        party: party && party.memberIds.includes(id) ? party : null,
+      });
+    }
+  }
+}
+
+function removeMemberFromFormedParty(
+  room: PartyRoom,
+  memberId: string,
+  noticeText?: string,
+  nowMs = Date.now()
+): void {
+  // Clean up pending invites involving this player
+  for (const [invId, inv] of room.pendingInvites.entries()) {
+    if (inv.fromId === memberId || inv.targetId === memberId || inv.expiresAt <= nowMs) {
+      room.pendingInvites.delete(invId);
+    }
+  }
+
+  const partyId = room.memberToPartyId.get(memberId);
+  if (!partyId) return;
+  room.memberToPartyId.delete(memberId);
+
+  const party = room.parties.get(partyId);
+  if (!party) return;
+
+  const previousMembers = [...party.memberIds];
+  party.memberIds = party.memberIds.filter((id) => id !== memberId);
+
+  const removedMember = room.members.get(memberId);
+  if (removedMember) {
+    removedMember.partyId = null;
+  }
+
+  if (party.memberIds.length < 2) {
+    // Disband party when fewer than 2 players remain
+    room.parties.delete(partyId);
+    for (const remId of party.memberIds) {
+      room.memberToPartyId.delete(remId);
+    }
+    if (noticeText) {
+      sendPartySystemNotice(room, previousMembers, `${noticeText} Группа расформирована.`, nowMs);
+    }
+    syncPartyGroupUpdate(room, previousMembers, null);
+    return;
+  }
+
+  if (party.leaderId === memberId) {
+    party.leaderId = party.memberIds[0];
+  }
+
+  if (noticeText) {
+    sendPartySystemNotice(room, party.memberIds, noticeText, nowMs);
+  }
+  syncPartyGroupUpdate(room, [memberId], null);
+  syncPartyGroupUpdate(room, party.memberIds, party);
+}
+
 function removeClientFromCurrentRoom(client: ClientConnection): void {
   if (!client.roomCode) return;
   const room = rooms.get(client.roomCode);
@@ -462,6 +581,11 @@ function removeClientFromCurrentRoom(client: ClientConnection): void {
   persistClientRuntimeVitals(client, room);
 
   const departingMember = room.members.get(client.id);
+  removeMemberFromFormedParty(
+    room,
+    client.id,
+    `${departingMember?.nickname ?? 'Игрок'} вышел из группы.`
+  );
   cancelTradesForMember(
     room,
     client.id,
@@ -865,7 +989,7 @@ async function startServer() {
       activeRooms.push({
         code: room.code,
         memberCount: room.members.size,
-        maxMembers: MAX_PARTY_SIZE,
+        maxMembers: MAX_WORLD_PLAYERS,
         members: Array.from(room.members.values()).map((m) => ({
           nickname: m.nickname,
           classId: m.classId,
@@ -950,13 +1074,13 @@ async function startServer() {
         let targetCode = requestedCode;
         const candidateRoom = getOrCreateRoom(targetCode);
         if (
-          candidateRoom.members.size >= MAX_PARTY_SIZE &&
+          candidateRoom.members.size >= MAX_WORLD_PLAYERS &&
           !candidateRoom.members.has(clientId)
         ) {
           if (requestedCode === DEFAULT_PARTY_ROOM) {
             let suffix = 2;
             while (
-              getOrCreateRoom(`MU-${suffix}`).members.size >= MAX_PARTY_SIZE &&
+              getOrCreateRoom(`MU-${suffix}`).members.size >= MAX_WORLD_PLAYERS &&
               suffix < 50
             ) {
               suffix += 1;
@@ -965,7 +1089,7 @@ async function startServer() {
           } else {
             sendJson(ws, {
               type: 'party:error',
-              message: `Пати #${requestedCode} уже заполнена (${MAX_PARTY_SIZE}/${MAX_PARTY_SIZE} игроков). Выберите другой код пати!`,
+              message: `Канал #${requestedCode} переполнен (${MAX_WORLD_PLAYERS}/${MAX_WORLD_PLAYERS} игроков). Выберите другой канал!`,
             });
             return;
           }
@@ -980,10 +1104,12 @@ async function startServer() {
         room.connections.set(clientId, client);
 
         const existing = room.members.get(clientId);
+        const existingParty = getPartyForMember(room, clientId);
         const memberState: PartyMemberState = {
           id: clientId,
           nickname,
           roomCode: targetCode,
+          partyId: existingParty ? existingParty.partyId : null,
           classId: sanitizeClassId(msg.classId ?? existing?.classId),
           classTier: sanitizeClassTier(msg.classTier ?? existing?.classTier),
           level: clampPositiveInt(msg.level, existing?.level ?? 1, 400),
@@ -1030,6 +1156,7 @@ async function startServer() {
           type: 'party:init',
           selfId: clientId,
           roomCode: targetCode,
+          party: existingParty,
           serverNowMs: now,
           worldGameTimeSec: nowGameSec,
           territoryId: memberState.territoryId,
@@ -1214,6 +1341,15 @@ async function startServer() {
         syncZoneStateToPersistence(room, territoryId, nowGameSec);
 
         if (result.killed) {
+          const killerParty = getPartyForMember(room, clientId);
+          const expInfo = getEligiblePartyExpRecipients(
+            killerParty,
+            room.members,
+            clientId,
+            PARTY_EXP_RANGE_METERS
+          );
+          const dropX = Math.round(result.unit.x);
+          const dropY = Math.round(result.unit.y);
           const killedEvent: ServerMonsterKilledEvent = {
             territoryId,
             inBloodCastle: false,
@@ -1225,12 +1361,16 @@ async function startServer() {
             killerNickname: member.nickname,
             expReward: result.unit.expReward,
             zenReward: result.unit.zenReward,
-            x: Math.round(result.unit.x),
-            y: Math.round(result.unit.y),
+            x: dropX,
+            y: dropY,
             anchorX: Math.round(result.unit.anchorX),
             anchorY: Math.round(result.unit.anchorY),
             respawnAtGameTimeSec: result.respawnAtGameTimeSec,
             respawnDurationSec: result.unit.respawnDurationSec,
+            killerX: member.x,
+            killerY: member.y,
+            expRecipientIds: expInfo.recipientIds,
+            partyBonusAlliesCount: expInfo.nearbyAlliesCount,
             timestamp: now,
           };
 
@@ -1238,6 +1378,38 @@ async function startServer() {
             type: 'party:monster_killed',
             event: killedEvent,
           });
+
+          // Server-authoritative shared ground loot for ALL players in this territory
+          const spawnedDrops = generateMonsterGroundDrops({
+            classId: member.classId,
+            territoryId,
+            inBloodCastle: false,
+            dropX,
+            dropY,
+            isBoss: result.unit.isBoss,
+            zenReward: result.unit.zenReward,
+            isQuestMonster: result.unit.isQuestMonster,
+            allowQuestItem: result.unit.isQuestMonster,
+            nowMs: now,
+          });
+          if (spawnedDrops.length > 0) {
+            const zoneKey = getPartyZoneKey(territoryId, false);
+            const activeLoot = getZoneActiveGroundLoot(room, zoneKey, now);
+            for (const drop of spawnedDrops) {
+              activeLoot.push(drop);
+            }
+            if (activeLoot.length > SERVER_CONFIG.maxGroundLootPerZone) {
+              activeLoot.splice(0, activeLoot.length - SERVER_CONFIG.maxGroundLootPerZone);
+            }
+            room.zoneGroundLoot.set(zoneKey, activeLoot);
+
+            broadcastToSameZone(room, territoryId, false, {
+              type: 'party:ground_loot_spawned',
+              territoryId,
+              inBloodCastle: false,
+              drops: spawnedDrops,
+            });
+          }
         } else {
           const hpEvent: ServerMonsterHpEvent = {
             territoryId,
@@ -1393,6 +1565,16 @@ async function startServer() {
             ? Math.round(Number(msg.respawnAtGameTimeSec) * 100) / 100
             : Math.round((nowGameSec + INDIVIDUAL_MONSTER_RESPAWN_SEC) * 100) / 100;
 
+        const killerParty = getPartyForMember(room, clientId);
+        const expInfo = getEligiblePartyExpRecipients(
+          killerParty,
+          room.members,
+          clientId,
+          PARTY_EXP_RANGE_METERS
+        );
+        const dropX = clampCoord(msg.x ?? member.x);
+        const dropY = clampCoord(msg.y ?? member.y);
+        const zenShare = clampPositiveInt(msg.zenShare, 15, 5_000_000);
         const killEvent: PartyKillShareEvent = {
           killerId: clientId,
           killerNickname: member.nickname,
@@ -1403,9 +1585,13 @@ async function startServer() {
           monsterName,
           isBoss: Boolean(msg.isBoss),
           expShare: clampPositiveInt(msg.expShare, 20, 50_000_000),
-          zenShare: clampPositiveInt(msg.zenShare, 15, 5_000_000),
-          x: clampCoord(msg.x ?? member.x),
-          y: clampCoord(msg.y ?? member.y),
+          zenShare,
+          x: dropX,
+          y: dropY,
+          killerX: member.x,
+          killerY: member.y,
+          expRecipientIds: expInfo.recipientIds,
+          partyBonusAlliesCount: expInfo.nearbyAlliesCount,
           timestamp: now,
         };
 
@@ -1430,6 +1616,34 @@ async function startServer() {
           },
           clientId
         );
+
+        if (member.inBloodCastle) {
+          const bcDrops = generateMonsterGroundDrops({
+            classId: member.classId,
+            territoryId: member.territoryId,
+            inBloodCastle: true,
+            dropX,
+            dropY,
+            isBoss: Boolean(msg.isBoss),
+            zenReward: zenShare,
+            nowMs: now,
+          });
+          if (bcDrops.length > 0) {
+            const zoneKey = getPartyZoneKey(member.territoryId, true);
+            const activeLoot = getZoneActiveGroundLoot(room, zoneKey, now);
+            for (const d of bcDrops) activeLoot.push(d);
+            if (activeLoot.length > SERVER_CONFIG.maxGroundLootPerZone) {
+              activeLoot.splice(0, activeLoot.length - SERVER_CONFIG.maxGroundLootPerZone);
+            }
+            room.zoneGroundLoot.set(zoneKey, activeLoot);
+            broadcastToSameZone(room, member.territoryId, true, {
+              type: 'party:ground_loot_spawned',
+              territoryId: member.territoryId,
+              inBloodCastle: true,
+              drops: bcDrops,
+            });
+          }
+        }
         return;
       }
 
@@ -1508,27 +1722,244 @@ async function startServer() {
         if (!dropId) return;
         const zoneKey = getPartyZoneKey(member.territoryId, member.inBloodCastle);
         const list = getZoneActiveGroundLoot(room, zoneKey, now);
-        if (list.some((d) => d.id === dropId)) {
-          room.zoneGroundLoot.set(
-            zoneKey,
-            list.filter((d) => d.id !== dropId)
-          );
+        const dropIndex = list.findIndex((d) => d.id === dropId);
+        if (dropIndex < 0) {
+          // Already picked up by someone else or expired
+          return;
+        }
+        const [claimedDrop] = list.splice(dropIndex, 1);
+        room.zoneGroundLoot.set(zoneKey, list);
+
+        const pickerParty = getPartyForMember(room, clientId);
+        const lootMode = pickerParty ? pickerParty.lootMode : 'finder';
+        const recipientId = resolvePartyLootRecipient(
+          pickerParty,
+          room.members,
+          clientId,
+          claimedDrop.x,
+          claimedDrop.y,
+          member.territoryId,
+          member.inBloodCastle
+        );
+        const recipientMember = room.members.get(recipientId) ?? member;
+        const recipientConn = room.connections.get(recipientMember.id) ?? client;
+
+        broadcastToSameZone(room, member.territoryId, member.inBloodCastle, {
+          type: 'party:ground_item_picked',
+          territoryId: member.territoryId,
+          inBloodCastle: member.inBloodCastle,
+          dropId,
+          pickerId: clientId,
+          pickerNickname: member.nickname,
+          recipientId: recipientMember.id,
+          recipientNickname: recipientMember.nickname,
+          dropLabel: claimedDrop.label,
+          lootMode,
+        });
+
+        sendJson(recipientConn.ws, {
+          type: 'party:loot_awarded',
+          drop: claimedDrop,
+          pickerId: clientId,
+          pickerNickname: member.nickname,
+          recipientId: recipientMember.id,
+          recipientNickname: recipientMember.nickname,
+          lootMode,
+        });
+        return;
+      }
+
+      // MANUAL PARTY FORMATION & LOOT SETTINGS PROTOCOL
+      if (msg.type === 'party:invite') {
+        const targetId = sanitizeEnemyId(msg.targetId);
+        if (!targetId || targetId === clientId) return;
+        const targetMember = room.members.get(targetId);
+        const targetConn = room.connections.get(targetId);
+        if (!targetMember || !targetConn) {
+          sendJson(ws, { type: 'party:error', message: 'Игрок не найден в сети.' });
+          return;
+        }
+        if (room.memberToPartyId.has(targetId)) {
+          sendJson(ws, {
+            type: 'party:error',
+            message: `${targetMember.nickname} уже состоит в группе.`,
+          });
+          return;
         }
 
-        broadcastToSameZone(
+        const existingParty = getPartyForMember(room, clientId);
+        if (existingParty) {
+          if (existingParty.leaderId !== clientId) {
+            sendJson(ws, {
+              type: 'party:error',
+              message: 'Приглашать новых участников может только лидер группы.',
+            });
+            return;
+          }
+          if (existingParty.memberIds.length >= MAX_PARTY_SIZE) {
+            sendJson(ws, {
+              type: 'party:error',
+              message: `Группа заполнена (${MAX_PARTY_SIZE}/${MAX_PARTY_SIZE}).`,
+            });
+            return;
+          }
+        }
+
+        // Remove expired invites or duplicate invite between same pair
+        for (const [invId, inv] of room.pendingInvites.entries()) {
+          if (inv.expiresAt <= now || (inv.fromId === clientId && inv.targetId === targetId)) {
+            room.pendingInvites.delete(invId);
+          }
+        }
+
+        const inviteId = `inv_${crypto.randomBytes(5).toString('hex')}`;
+        const invitePayload: PartyInvitePayload = {
+          inviteId,
+          fromId: clientId,
+          fromNickname: member.nickname,
+          fromClassId: member.classId,
+          fromLevel: member.level,
+          partyId: existingParty?.partyId ?? null,
+          lootMode: existingParty?.lootMode ?? 'finder',
+          expiresAt: now + 30_000,
+        };
+        room.pendingInvites.set(inviteId, { ...invitePayload, targetId });
+
+        sendJson(targetConn.ws, {
+          type: 'party:invite_received',
+          invite: invitePayload,
+        });
+        sendPartySystemNotice(
           room,
-          member.territoryId,
-          member.inBloodCastle,
-          {
-            type: 'party:ground_item_picked',
-            territoryId: member.territoryId,
-            inBloodCastle: member.inBloodCastle,
-            dropId,
-            pickerId: clientId,
-            pickerNickname: member.nickname,
-          },
-          clientId
+          [clientId],
+          `Приглашение в группу отправлено игроку ${targetMember.nickname}.`,
+          now
         );
+        return;
+      }
+
+      if (msg.type === 'party:invite_respond') {
+        const inviteId = sanitizeEnemyId(msg.inviteId);
+        const accept = Boolean(msg.accept);
+        const invite = room.pendingInvites.get(inviteId);
+        if (!invite || invite.targetId !== clientId) return;
+        room.pendingInvites.delete(inviteId);
+
+        const inviterMember = room.members.get(invite.fromId);
+        const inviterConn = room.connections.get(invite.fromId);
+        if (invite.expiresAt <= now || !inviterMember || !inviterConn) {
+          sendJson(ws, {
+            type: 'party:error',
+            message: 'Приглашение в группу устарело или игрок вышел из сети.',
+          });
+          return;
+        }
+
+        if (!accept) {
+          sendPartySystemNotice(
+            room,
+            [invite.fromId],
+            `${member.nickname} отклонил приглашение в группу.`,
+            now
+          );
+          return;
+        }
+
+        if (room.memberToPartyId.has(clientId)) {
+          sendJson(ws, {
+            type: 'party:error',
+            message: 'Вы уже состоите в группе. Сначала выйдите из текущей группы.',
+          });
+          return;
+        }
+
+        let party = getPartyForMember(room, invite.fromId);
+        if (party) {
+          if (party.memberIds.length >= MAX_PARTY_SIZE) {
+            sendJson(ws, {
+              type: 'party:error',
+              message: `Группа игрока ${inviterMember.nickname} уже заполнена.`,
+            });
+            return;
+          }
+          if (!party.memberIds.includes(clientId)) {
+            party.memberIds.push(clientId);
+          }
+        } else {
+          const partyId = `pty_${crypto.randomBytes(5).toString('hex')}`;
+          party = {
+            partyId,
+            leaderId: invite.fromId,
+            lootMode: 'finder',
+            memberIds: [invite.fromId, clientId],
+          };
+          room.parties.set(partyId, party);
+          room.memberToPartyId.set(invite.fromId, partyId);
+        }
+        room.memberToPartyId.set(clientId, party.partyId);
+
+        syncPartyGroupUpdate(room, party.memberIds, party);
+        sendPartySystemNotice(
+          room,
+          party.memberIds,
+          `🤝 ${member.nickname} вступил в группу! Опыт делится на дистанции до ${PARTY_EXP_RANGE_METERS} м.`,
+          now
+        );
+        return;
+      }
+
+      if (msg.type === 'party:set_loot_mode') {
+        const party = getPartyForMember(room, clientId);
+        if (!party) {
+          sendJson(ws, { type: 'party:error', message: 'Вы не состоите в группе.' });
+          return;
+        }
+        if (party.leaderId !== clientId) {
+          sendJson(ws, {
+            type: 'party:error',
+            message: 'Менять настройку добычи может только лидер группы.',
+          });
+          return;
+        }
+        const nextMode = sanitizePartyLootMode(msg.lootMode);
+        if (party.lootMode === nextMode) return;
+        party.lootMode = nextMode;
+        syncPartyGroupUpdate(room, party.memberIds, party);
+        const modeLabel = nextMode === 'random' ? '🎲 Случайно (участнику рядом)' : '✋ Нашедшему';
+        sendPartySystemNotice(
+          room,
+          party.memberIds,
+          `Лидер ${member.nickname} установил режим добычи: ${modeLabel}.`,
+          now
+        );
+        return;
+      }
+
+      if (msg.type === 'party:leave') {
+        removeMemberFromFormedParty(room, clientId, `${member.nickname} покинул группу.`, now);
+        return;
+      }
+
+      if (msg.type === 'party:kick') {
+        const targetId = sanitizeEnemyId(msg.targetId);
+        if (!targetId || targetId === clientId) return;
+        const party = getPartyForMember(room, clientId);
+        if (!party || party.leaderId !== clientId) {
+          sendJson(ws, {
+            type: 'party:error',
+            message: 'Исключать участников может только лидер группы.',
+          });
+          return;
+        }
+        if (!party.memberIds.includes(targetId)) return;
+        const targetNick = room.members.get(targetId)?.nickname ?? 'Игрок';
+        removeMemberFromFormedParty(
+          room,
+          targetId,
+          `${targetNick} исключён из группы лидером ${member.nickname}.`,
+          now
+        );
+        sendPartySystemNotice(room, [targetId], `Вас исключили из группы.`, now);
         return;
       }
 

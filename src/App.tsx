@@ -18,8 +18,10 @@ import { ServerMonsterAttackEvent } from './game/worldMonsters';
 import { detectTouchDevice, requestMobileLandscapeFullscreen } from './utils/mobileOrientation';
 import {
   DEFAULT_PARTY_ROOM,
+  PARTY_EXP_RANGE_METERS,
   applyCompletedTradeToPlayer,
   calculatePartyCoopExpBonus,
+  getEligiblePartyExpRecipients,
   getSameZonePartyAllies,
   sanitizePartyCode,
   sanitizePlayerNickname,
@@ -52,6 +54,7 @@ import {
 import { soundEngine } from './game/sound';
 import {
   AccountCharacterRecord,
+  ActivePartyState,
   BloodCastleStage,
   CharacterAttributes,
   CharacterClassId,
@@ -62,7 +65,9 @@ import {
   LootDrop,
   PartyAttackEvent,
   PartyChatMessage,
+  PartyInvitePayload,
   PartyKillShareEvent,
+  PartyLootMode,
   PartyMemberState,
   PartyZoneMonsterSnapshot,
   PlayerProgressState,
@@ -111,6 +116,8 @@ export default function App() {
   const [partyRoomCode, setPartyRoomCode] = useState<string>(initialPartyFromUrl);
   const [partyConnected, setPartyConnected] = useState<boolean>(false);
   const [partyMembers, setPartyMembers] = useState<PartyMemberState[]>([]);
+  const [activeParty, setActiveParty] = useState<ActivePartyState | null>(null);
+  const [pendingPartyInvite, setPendingPartyInvite] = useState<PartyInvitePayload | null>(null);
   const [partyChatMessages, setPartyChatMessages] = useState<PartyChatMessage[]>([]);
   const [partyError, setPartyError] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState<boolean>(false);
@@ -119,6 +126,8 @@ export default function App() {
 
   const partyMembersRef = useRef<PartyMemberState[]>([]);
   partyMembersRef.current = partyMembers;
+  const activePartyRef = useRef<ActivePartyState | null>(null);
+  activePartyRef.current = activeParty;
 
   const wsRef = useRef<WebSocket | null>(null);
   const playerStateRef = useRef<PlayerProgressState>(player);
@@ -367,6 +376,10 @@ export default function App() {
           partySelfIdRef.current = selfId;
           setPartyRoomCode(confirmedRoom);
           partyRoomCodeRef.current = confirmedRoom;
+          const initParty = (data.party as ActivePartyState | null | undefined) ?? null;
+          setActiveParty(initParty);
+          activePartyRef.current = initParty;
+          setPendingPartyInvite(null);
           if (Array.isArray(data.members)) {
             setPartyMembers(data.members as PartyMemberState[]);
           }
@@ -442,13 +455,20 @@ export default function App() {
           engineActionsRef.current?.applyServerMonsterKilled(event);
 
           const isKiller = event.killerId === partySelfIdRef.current;
-          const sameZoneAllies = getSameZonePartyAllies(
-            partyMembersRef.current,
-            partySelfIdRef.current,
-            localP.territoryId,
-            localP.inBloodCastle
-          );
-          const coop = calculatePartyCoopExpBonus(event.expReward, sameZoneAllies.length);
+          const isExpRecipient =
+            isKiller ||
+            (Array.isArray(event.expRecipientIds) &&
+              event.expRecipientIds.includes(partySelfIdRef.current));
+
+          if (!isExpRecipient) {
+            return;
+          }
+
+          const nearbyAlliesCount =
+            typeof event.partyBonusAlliesCount === 'number'
+              ? event.partyBonusAlliesCount
+              : 0;
+          const coop = calculatePartyCoopExpBonus(event.expReward, nearbyAlliesCount);
           const levelScaledExp = Math.max(
             1,
             Math.round(
@@ -517,10 +537,31 @@ export default function App() {
           return;
         }
 
+        if (data.type === 'party:group_updated') {
+          const nextParty = (data.party as ActivePartyState | null | undefined) ?? null;
+          setActiveParty(nextParty);
+          activePartyRef.current = nextParty;
+          if (nextParty) {
+            setPendingPartyInvite(null);
+          }
+          return;
+        }
+
+        if (data.type === 'party:invite_received') {
+          const invite = data.invite as PartyInvitePayload | undefined;
+          if (!invite || typeof invite.inviteId !== 'string') return;
+          setPendingPartyInvite(invite);
+          soundEngine.playLootPickup();
+          engineActionsRef.current?.notifyStatusMessage(
+            `🤝 ${invite.fromNickname} приглашает вас в группу!`,
+            '#34d399'
+          );
+          return;
+        }
+
         if (data.type === 'party:member_joined' || data.type === 'party:member_updated') {
           const incoming = data.member as PartyMemberState | undefined;
           if (!incoming || typeof incoming.id !== 'string') return;
-          const isJoin = data.type === 'party:member_joined';
           setPartyMembers((prev) => {
             const exists = prev.some((m) => m.id === incoming.id);
             if (!exists) {
@@ -528,24 +569,13 @@ export default function App() {
             }
             return prev.map((m) => (m.id === incoming.id ? { ...m, ...incoming } : m));
           });
-          if (isJoin && incoming.id !== partySelfIdRef.current) {
-            engineActionsRef.current?.notifyStatusMessage(
-              `🤝 ${incoming.nickname} присоединился к вашей Пати #${partyRoomCodeRef.current}!`,
-              '#34d399'
-            );
-          }
           return;
         }
 
         if (data.type === 'party:member_left') {
           const leftId = typeof data.memberId === 'string' ? data.memberId : '';
-          const leftNick = typeof data.nickname === 'string' ? data.nickname : 'Союзник';
           if (!leftId) return;
           setPartyMembers((prev) => prev.filter((m) => m.id !== leftId));
-          engineActionsRef.current?.notifyStatusMessage(
-            `👋 ${leftNick} покинул Пати.`,
-            '#fbbf24'
-          );
           return;
         }
 
@@ -594,8 +624,15 @@ export default function App() {
             : !localP.inBloodCastle && localP.territoryId === kill.territoryId;
           if (!sameZone) return;
 
-          // Transition the exact shared monster to KO and spawn loot drops on the friend's floor too!
+          // Transition the exact shared monster to KO on the peer's screen
           engineActionsRef.current?.applyRemoteSharedKill(kill);
+
+          const isExpRecipient =
+            Array.isArray(kill.expRecipientIds) &&
+            kill.expRecipientIds.includes(partySelfIdRef.current);
+          if (!isExpRecipient) {
+            return;
+          }
 
           setPlayer((prev) => {
             const { nextState, leveledUp } = grantExperience(prev, kill.expShare);
@@ -651,6 +688,18 @@ export default function App() {
           return;
         }
 
+        if (data.type === 'party:ground_loot_spawned') {
+          const drops = data.drops as LootDrop[] | undefined;
+          if (!Array.isArray(drops) || drops.length === 0) return;
+          const localP = playerStateRef.current;
+          const sameZone = Boolean(data.inBloodCastle)
+            ? localP.inBloodCastle
+            : !localP.inBloodCastle && data.territoryId === localP.territoryId;
+          if (!sameZone) return;
+          engineActionsRef.current?.addServerGroundLootBatch(drops);
+          return;
+        }
+
         if (data.type === 'party:ground_item_dropped') {
           const drop = data.drop as LootDrop | undefined;
           if (!drop || typeof drop.id !== 'string') return;
@@ -671,8 +720,91 @@ export default function App() {
             ? localP.inBloodCastle
             : !localP.inBloodCastle && data.territoryId === localP.territoryId;
           if (!sameZone) return;
+          const pickerId = typeof data.pickerId === 'string' ? data.pickerId : '';
           const pickerNick = typeof data.pickerNickname === 'string' ? data.pickerNickname : undefined;
-          engineActionsRef.current?.removeRemoteGroundLoot(dropId, pickerNick);
+          const recipientNick =
+            typeof data.recipientNickname === 'string' ? data.recipientNickname : undefined;
+          const lootMode = (data.lootMode === 'random' ? 'random' : 'finder') as PartyLootMode;
+          const showNick =
+            pickerId !== partySelfIdRef.current ||
+            (typeof data.recipientId === 'string' && data.recipientId !== partySelfIdRef.current)
+              ? pickerNick
+              : undefined;
+          engineActionsRef.current?.removeRemoteGroundLoot(
+            dropId,
+            showNick,
+            recipientNick,
+            lootMode
+          );
+          return;
+        }
+
+        if (data.type === 'party:loot_awarded') {
+          const drop = data.drop as LootDrop | undefined;
+          if (!drop || typeof drop.id !== 'string') return;
+          const pickerId = typeof data.pickerId === 'string' ? data.pickerId : '';
+          const pickerNick = typeof data.pickerNickname === 'string' ? data.pickerNickname : '';
+          const lootMode = (data.lootMode === 'random' ? 'random' : 'finder') as PartyLootMode;
+
+          setPlayer((prev) => {
+            if (drop.type === 'zen') {
+              return { ...prev, zen: prev.zen + (drop.amount ?? 50) };
+            }
+            if (drop.type === 'quest_item') {
+              soundEngine.playLevelUp();
+              return { ...prev, hasFirstProfQuestItem: true };
+            }
+            if (drop.type === 'jewel_bless') {
+              return { ...prev, jewels: { ...prev.jewels, bless: prev.jewels.bless + 1 } };
+            }
+            if (drop.type === 'jewel_soul') {
+              return { ...prev, jewels: { ...prev.jewels, soul: prev.jewels.soul + 1 } };
+            }
+            if (drop.type === 'jewel_life') {
+              return { ...prev, jewels: { ...prev.jewels, life: prev.jewels.life + 1 } };
+            }
+            if (drop.type === 'jewel_chaos') {
+              return { ...prev, jewels: { ...prev.jewels, chaos: prev.jewels.chaos + 1 } };
+            }
+            if (drop.type === 'blood_scroll') {
+              return { ...prev, bloodScrolls: prev.bloodScrolls + 1 };
+            }
+            if (drop.type === 'blood_fang') {
+              return { ...prev, bloodFangs: prev.bloodFangs + 1 };
+            }
+            if (drop.type === 'equipment' && drop.equipment) {
+              const dropSlot = drop.equipment.slot;
+              if (prev.equipped[dropSlot] === null) {
+                return { ...prev, equipped: { ...prev.equipped, [dropSlot]: drop.equipment } };
+              }
+              if (prev.inventory.length >= 24) {
+                return { ...prev, zen: prev.zen + drop.equipment.valueZen };
+              }
+              return { ...prev, inventory: [drop.equipment, ...prev.inventory] };
+            }
+            return prev;
+          });
+
+          if (drop.type === 'zen') {
+            soundEngine.playZenPickup();
+          } else if (
+            drop.type.startsWith('jewel_') ||
+            drop.type === 'blood_scroll' ||
+            drop.type === 'blood_fang'
+          ) {
+            soundEngine.playJewelDrop();
+          } else {
+            soundEngine.playLootPickup();
+          }
+
+          if (lootMode === 'random' && pickerId && pickerId !== partySelfIdRef.current) {
+            engineActionsRef.current?.notifyStatusMessage(
+              `🎲 Добыча пати (поднял ${pickerNick}): +${drop.label}!`,
+              drop.rarityColor
+            );
+          } else {
+            engineActionsRef.current?.notifyStatusMessage(`+${drop.label}`, drop.rarityColor);
+          }
           return;
         }
 
@@ -825,7 +957,7 @@ export default function App() {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       engineActionsRef.current?.notifyStatusMessage(
-        '⚖️ Нет соединения с сервером пати для обмена.',
+        '⚖️ Нет соединения с сервером для обмена.',
         '#f43f5e'
       );
       return;
@@ -836,6 +968,49 @@ export default function App() {
         targetId: ally.id,
       })
     );
+  }, []);
+
+  const handleInviteToParty = useCallback((targetId: string) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      engineActionsRef.current?.notifyStatusMessage(
+        '🤝 Нет соединения с сервером для приглашения в группу.',
+        '#f43f5e'
+      );
+      return;
+    }
+    setPartyError(null);
+    ws.send(JSON.stringify({ type: 'party:invite', targetId }));
+  }, []);
+
+  const handleRespondPartyInvite = useCallback((inviteId: string, accept: boolean) => {
+    setPendingPartyInvite(null);
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'party:invite_respond', inviteId, accept }));
+  }, []);
+
+  const handleSetPartyLootMode = useCallback((lootMode: PartyLootMode) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    setPartyError(null);
+    ws.send(JSON.stringify({ type: 'party:set_loot_mode', lootMode }));
+  }, []);
+
+  const handleLeaveParty = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setActiveParty(null);
+      activePartyRef.current = null;
+      return;
+    }
+    ws.send(JSON.stringify({ type: 'party:leave' }));
+  }, []);
+
+  const handleKickPartyMember = useCallback((targetId: string) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'party:kick', targetId }));
   }, []);
 
   const handleRespondTrade = useCallback((tradeId: string, accept: boolean) => {
@@ -984,15 +1159,13 @@ export default function App() {
     }) => {
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      const p = playerStateRef.current;
-      const sameZoneAllies = getSameZonePartyAllies(
+      const expInfo = getEligiblePartyExpRecipients(
+        activePartyRef.current,
         partyMembersRef.current,
         partySelfIdRef.current,
-        p.territoryId,
-        p.inBloodCastle
+        PARTY_EXP_RANGE_METERS
       );
-      if (sameZoneAllies.length === 0) return;
-      const coop = calculatePartyCoopExpBonus(kill.expReward, sameZoneAllies.length);
+      const coop = calculatePartyCoopExpBonus(kill.expReward, expInfo.nearbyAlliesCount);
       ws.send(
         JSON.stringify({
           type: 'party:kill',
@@ -1375,13 +1548,13 @@ export default function App() {
   const handleEnemyKilled = useCallback(
     (expGain: number, isBoss: boolean, bloodCastleCleared: boolean) => {
       setPlayer((prev) => {
-        const sameZoneAllies = getSameZonePartyAllies(
+        const expInfo = getEligiblePartyExpRecipients(
+          activePartyRef.current,
           partyMembersRef.current,
           partySelfIdRef.current,
-          prev.territoryId,
-          prev.inBloodCastle
+          PARTY_EXP_RANGE_METERS
         );
-        const coopBonus = calculatePartyCoopExpBonus(expGain, sameZoneAllies.length);
+        const coopBonus = calculatePartyCoopExpBonus(expGain, expInfo.nearbyAlliesCount);
         const { nextState, leveledUp } = grantExperience(prev, coopBonus.killerTotalExp);
         if (leveledUp) {
           soundEngine.playLevelUp();
@@ -1499,6 +1672,16 @@ export default function App() {
     return success || player.hpPotions > 0;
   }, [player.hpPotions]);
 
+  const handleConsumeLargeHpPotion = useCallback((): boolean => {
+    let success = false;
+    setPlayer((prev) => {
+      if ((prev.largeHpPotions ?? 0) <= 0) return prev;
+      success = true;
+      return { ...prev, largeHpPotions: prev.largeHpPotions - 1 };
+    });
+    return success || (player.largeHpPotions ?? 0) > 0;
+  }, [player.largeHpPotions]);
+
   const handleConsumeMpPotion = useCallback((): boolean => {
     let success = false;
     setPlayer((prev) => {
@@ -1509,7 +1692,7 @@ export default function App() {
     return success || player.mpPotions > 0;
   }, [player.mpPotions]);
 
-  const handleBuyPotions = (potionType: 'hp' | 'mp', packSize: 5 | 20): string => {
+  const handleBuyPotions = (potionType: 'hp' | 'large_hp' | 'mp', packSize: 5 | 20): string => {
     const result = buyPotionsWithZen(player, potionType, packSize, hudSync.isNearShop);
     setPlayer(result.nextState);
     if (result.success) {
@@ -1840,6 +2023,7 @@ export default function App() {
         onEnemyKilled={handleEnemyKilled}
         onLootCollected={handleLootCollected}
         onConsumeHpPotion={handleConsumeHpPotion}
+        onConsumeLargeHpPotion={handleConsumeLargeHpPotion}
         onConsumeMpPotion={handleConsumeMpPotion}
         onPlayerDefeated={handlePlayerDefeated}
         onCompleteBloodCastleQuest={handleCompleteBloodCastleQuest}
@@ -1889,11 +2073,15 @@ export default function App() {
             partyRoomCode={partyRoomCode}
             partyConnected={partyConnected}
             partyMembers={partyMembers}
+            activeParty={activeParty}
+            pendingPartyInvite={pendingPartyInvite}
             zoneChatMessages={partyChatMessages}
             chatInputRef={chatInputRef}
             chatOpen={chatOpen}
             onSetChatOpen={setChatOpen}
             onSendZoneChat={handleSendPartyChat}
+            onRespondPartyInvite={handleRespondPartyInvite}
+            onInviteToParty={handleInviteToParty}
             onRequestTradeWithAlly={handleRequestTradeWithAlly}
             onOpenPartyModal={() =>
               setActiveDrawer((d) => (d === 'party' ? 'none' : 'party'))
@@ -1944,18 +2132,20 @@ export default function App() {
             hasWeapon={player.equipped.weapon !== null}
             cooldowns={hudSync.cooldowns}
             hpPotions={player.hpPotions}
+            largeHpPotions={player.largeHpPotions ?? 0}
             mpPotions={player.mpPotions}
             autoHunt={autoHunt && player.level >= 5}
             nearbyLootCount={hudSync.nearbyLootCount}
             comboStage={hudSync.comboStage}
             isNearShop={hudSync.isNearShop}
-            partyMemberCount={partyMembers.length}
+            partyMemberCount={activeParty ? activeParty.memberIds.length : 0}
             onJoystickMove={(dx, dy) =>
               engineActionsRef.current?.setJoystickVector(dx, dy)
             }
             onPrimaryAttack={() => engineActionsRef.current?.triggerPrimaryAttack()}
             onUseSkill={(idx) => engineActionsRef.current?.triggerSkill(idx)}
             onUseHpPotion={() => engineActionsRef.current?.triggerHpPotion()}
+            onUseLargeHpPotion={() => engineActionsRef.current?.triggerLargeHpPotion()}
             onUseMpPotion={() => engineActionsRef.current?.triggerMpPotion()}
             onApproachShop={handleApproachOrOpenShop}
             onPickupLoot={() => engineActionsRef.current?.triggerPickupNearbyLoot()}
@@ -2053,9 +2243,17 @@ export default function App() {
           roomCode={partyRoomCode}
           wsConnected={partyConnected}
           partyMembers={partyMembers}
+          activeParty={activeParty}
+          pendingPartyInvite={pendingPartyInvite}
           chatMessages={partyChatMessages}
           errorMessage={partyError}
           onUpdateIdentity={handleUpdatePartyIdentity}
+          onInviteToParty={handleInviteToParty}
+          onRespondPartyInvite={handleRespondPartyInvite}
+          onSetPartyLootMode={handleSetPartyLootMode}
+          onLeaveParty={handleLeaveParty}
+          onKickPartyMember={handleKickPartyMember}
+          onRequestTradeWithAlly={handleRequestTradeWithAlly}
           onSendChat={handleSendPartyChat}
           onTeleportToAlly={handleTeleportToAlly}
           onClose={() => setActiveDrawer('none')}

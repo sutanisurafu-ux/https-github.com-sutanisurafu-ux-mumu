@@ -309,6 +309,7 @@ export interface PlayerProgressState {
   };
   potions: number; // Mirror of hpPotions for legacy compatibility
   hpPotions: number;
+  largeHpPotions: number;
   mpPotions: number;
   hasFirstProfQuestItem: boolean;
   bloodScrolls: number; // Кровавый Свиток (Scroll of Archangel / Blood Scroll)
@@ -346,10 +347,31 @@ export interface EndOfRunSnapshot {
   bossHpRemaining: number;
 }
 
+export type PartyLootMode = 'finder' | 'random';
+
+export interface ActivePartyState {
+  partyId: string;
+  leaderId: string;
+  lootMode: PartyLootMode;
+  memberIds: string[];
+}
+
+export interface PartyInvitePayload {
+  inviteId: string;
+  fromId: string;
+  fromNickname: string;
+  fromClassId: CharacterClassId;
+  fromLevel: number;
+  partyId: string | null;
+  lootMode: PartyLootMode;
+  expiresAt: number;
+}
+
 export interface PartyMemberState {
   id: string;
   nickname: string;
   roomCode: string;
+  partyId?: string | null;
   classId: CharacterClassId;
   classTier: ClassTier;
   level: number;
@@ -406,6 +428,10 @@ export interface PartyKillShareEvent {
   zenShare: number;
   x: number;
   y: number;
+  killerX?: number;
+  killerY?: number;
+  expRecipientIds?: string[];
+  partyBonusAlliesCount?: number;
   timestamp: number;
 }
 
@@ -473,6 +499,10 @@ export interface ServerMonsterKilledEvent {
   anchorY: number;
   respawnAtGameTimeSec: number;
   respawnDurationSec: number;
+  killerX?: number;
+  killerY?: number;
+  expRecipientIds?: string[];
+  partyBonusAlliesCount?: number;
   timestamp: number;
 }
 

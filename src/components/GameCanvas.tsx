@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { DROP_RATES, SERVER_CONFIG } from '../config';
+import { CHARACTER_SCALING, DROP_RATES, SERVER_CONFIG } from '../config';
 import { drawEnemyModel, drawHeroModel, drawNpcModel } from '../game/models';
 import {
   GROUND_LOOT_TTL_MS,
@@ -9,6 +9,7 @@ import {
   getSameZonePartyAllies,
   getWorldGameTimeSec,
   isGroundLootExpired,
+  isSoundAudibleAt,
 } from '../game/party';
 import {
   CLASSES,
@@ -31,6 +32,7 @@ import {
   LootDrop,
   PartyAttackEvent,
   PartyKillShareEvent,
+  PartyLootMode,
   PartyMemberState,
   PartyZoneMonsterSnapshot,
   PlayerProgressState,
@@ -101,6 +103,7 @@ export interface GameEngineActions {
   triggerPrimaryAttack: () => void;
   triggerSkill: (skillIndex: number) => void;
   triggerHpPotion: () => void;
+  triggerLargeHpPotion: () => void;
   triggerMpPotion: () => void;
   triggerPickupNearbyLoot: () => void;
   triggerDash: () => void;
@@ -124,8 +127,14 @@ export interface GameEngineActions {
   applyServerMonsterAttack: (event: ServerMonsterAttackEvent) => void;
   dropEquipmentOnGround: (item: EquipmentItem) => LootDrop;
   syncServerGroundLoot: (drops: LootDrop[]) => void;
+  addServerGroundLootBatch: (drops: LootDrop[]) => void;
   addRemoteGroundLoot: (drop: LootDrop) => void;
-  removeRemoteGroundLoot: (dropId: string, pickerNickname?: string) => void;
+  removeRemoteGroundLoot: (
+    dropId: string,
+    pickerNickname?: string,
+    recipientNickname?: string,
+    lootMode?: PartyLootMode
+  ) => void;
   setLocalChatBubble: (text: string) => void;
   applyServerHeroVitals: (vitals: { x: number; y: number; hp: number; mp: number }) => void;
   getHeroRuntimeVitals: () => {
@@ -198,6 +207,7 @@ interface GameCanvasProps {
   onEnemyKilled: (expGain: number, isBoss: boolean, territoryCompleted: boolean) => void;
   onLootCollected: (loot: LootDrop) => void;
   onConsumeHpPotion: () => boolean;
+  onConsumeLargeHpPotion: () => boolean;
   onConsumeMpPotion: () => boolean;
   onPlayerDefeated: (bossHpRemaining: number) => void;
   onCompleteBloodCastleQuest: () => void;
@@ -268,6 +278,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   onEnemyKilled,
   onLootCollected,
   onConsumeHpPotion,
+  onConsumeLargeHpPotion,
   onConsumeMpPotion,
   onPlayerDefeated,
   onCompleteBloodCastleQuest,
@@ -299,6 +310,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     onEnemyKilled,
     onLootCollected,
     onConsumeHpPotion,
+    onConsumeLargeHpPotion,
     onConsumeMpPotion,
     onPlayerDefeated,
     onCompleteBloodCastleQuest,
@@ -318,6 +330,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     onEnemyKilled,
     onLootCollected,
     onConsumeHpPotion,
+    onConsumeLargeHpPotion,
     onConsumeMpPotion,
     onPlayerDefeated,
     onCompleteBloodCastleQuest,
@@ -739,6 +752,11 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       };
     };
 
+    const isAudibleAt = (sourceX: number, sourceY: number): boolean =>
+      isSoundAudibleAt(hero.x, hero.y, sourceX, sourceY);
+
+    const pendingServerPickupUntil = new Map<string, number>();
+
     const spawnTerritoryBossLocal = () => {
       const bossUnit = createTerritoryBossUnit(activeTerritoryId);
       const bossEntity = blueprintToEnemyEntity(bossUnit, false);
@@ -756,7 +774,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         '#facc15',
         1.3
       );
-      soundEngine.playGoldenBossInvasion();
+      if (isAudibleAt(bossEntity.x, bossEntity.y)) {
+        soundEngine.playGoldenBossInvasion();
+      }
     };
 
     const bcBlueprintToEnemyEntity = (
@@ -1031,7 +1051,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           spawnTime: nowWall,
           expiresAtMs,
         });
-        soundEngine.playZenDrop();
+        if (isAudibleAt(dropX, dropY)) {
+          soundEngine.playZenDrop();
+        }
       }
 
       const jewelRoll = Math.random();
@@ -1056,7 +1078,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           expiresAtMs,
         });
         spawnFloatingText(dropX, dropY - 36, `✦ КАМЕНЬ: ${jLabel}!`, '#fbbf24', 1.2);
-        soundEngine.playJewelDrop();
+        if (isAudibleAt(dropX, dropY)) {
+          soundEngine.playJewelDrop();
+        }
       }
 
       const bcMat = rollBloodCastleMaterialDrop(isBoss, Math.random());
@@ -1076,7 +1100,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           expiresAtMs,
         });
         spawnFloatingText(dropX, dropY - 44, `🩸 ${matLabel}!`, '#fb7185', 1.18);
-        soundEngine.playJewelDrop();
+        if (isAudibleAt(dropX, dropY)) {
+          soundEngine.playJewelDrop();
+        }
       }
 
       const equipChance = isBoss
@@ -1117,7 +1143,11 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           eqColor,
           isBoss ? 1.3 : 1.25
         );
-        soundEngine.playEquipmentDrop(isBoss || eq.rarity === 'ancient' || eq.rarity === 'excellent');
+        if (isAudibleAt(lx, ly)) {
+          soundEngine.playEquipmentDrop(
+            isBoss || eq.rarity === 'ancient' || eq.rarity === 'excellent'
+          );
+        }
       }
 
       const alreadyDroppedOnFloor = lootDrops.some((d) => d.type === 'quest_item');
@@ -1307,7 +1337,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         hitstopTimer = Math.max(hitstopTimer, enemy.isBoss ? 0.08 : 0.04);
         cameraTrauma = Math.min(1, cameraTrauma + (enemy.isBoss ? 0.65 : 0.25));
         spawnParticles(enemy.x, enemy.y, enemy.isBoss ? 28 : 16, enemy.color, 60, 220, 4, 0.55);
-        soundEngine.playEnemyDeath(enemy.isBoss);
+        if (isAudibleAt(enemy.x, enemy.y)) {
+          soundEngine.playEnemyDeath(enemy.isBoss);
+        }
 
         if (isZoneHost && !enemy.isStructure && activeInBloodCastle) {
           callbacksRef.current.onPartyBroadcastKill?.({
@@ -1375,7 +1407,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             }
           }
 
-          spawnLootForKilledMonster(enemy.x, enemy.y, false, enemy.zenReward, false);
+          if (!wsConnectedRef.current) {
+            spawnLootForKilledMonster(enemy.x, enemy.y, false, enemy.zenReward, false);
+          }
           callbacksRef.current.onEnemyKilled(enemy.expReward, false, false);
           return;
         }
@@ -1669,8 +1703,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       if (hero.hp >= derived.maxHp) return;
       const consumed = callbacksRef.current.onConsumeHpPotion();
       if (consumed) {
-        hero.hpPotionCooldown = 1.25;
-        const healHp = Math.round(derived.maxHp * 0.48);
+        const potCfg = CHARACTER_SCALING.potions;
+        hero.hpPotionCooldown = potCfg.hpCooldownSec;
+        const healHp = potCfg.smallHpHeal;
         hero.hp = Math.min(derived.maxHp, hero.hp + healHp);
         spawnFloatingText(
           hero.x,
@@ -1679,15 +1714,46 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           '#fb7185',
           1.12
         );
-        spawnParticles(hero.x, hero.y, 12, '#f43f5e', 30, 110, 3.5, 0.45);
+        spawnParticles(hero.x, hero.y, 10, '#f43f5e', 30, 105, 3.2, 0.4);
         soundEngine.playPotion('hp');
       } else if (hero.noPotionWarnCooldown <= 0) {
         hero.noPotionWarnCooldown = 2.8;
         spawnFloatingText(
           hero.x,
           hero.y - 34,
-          '⚠️ Нет Банок ОЗ! Купите за Zen [+5🧪]',
+          '⚠️ Нет Банок ОЗ! Купите в Лавке [B]',
           '#f43f5e',
+          1.15
+        );
+      }
+    };
+
+    const executeLargeHpPotion = (isAuto = false) => {
+      if (hero.hpPotionCooldown > 0) return;
+      const derived = getCachedDerivedStats(playerRef.current);
+      if (hero.hp >= derived.maxHp) return;
+      const consumed = callbacksRef.current.onConsumeLargeHpPotion();
+      if (consumed) {
+        const potCfg = CHARACTER_SCALING.potions;
+        hero.hpPotionCooldown = potCfg.hpCooldownSec;
+        const healHp = potCfg.largeHpHeal;
+        hero.hp = Math.min(derived.maxHp, hero.hp + healHp);
+        spawnFloatingText(
+          hero.x,
+          hero.y - 30,
+          `${isAuto ? 'АВТО 🍷 ' : '🍷 '}+${healHp} ОЗ (БОЛЬШ.)`,
+          '#fda4af',
+          1.22
+        );
+        spawnParticles(hero.x, hero.y, 16, '#fb7185', 36, 130, 3.8, 0.5);
+        soundEngine.playPotion('hp');
+      } else if (hero.noPotionWarnCooldown <= 0) {
+        hero.noPotionWarnCooldown = 2.8;
+        spawnFloatingText(
+          hero.x,
+          hero.y - 34,
+          '⚠️ Нет Больших Банок ОЗ (+500)! Купите в Лавке [B]',
+          '#fb7185',
           1.15
         );
       }
@@ -1699,7 +1765,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       if (hero.mp >= derived.maxMp) return;
       const consumed = callbacksRef.current.onConsumeMpPotion();
       if (consumed) {
-        hero.mpPotionCooldown = 1.25;
+        hero.mpPotionCooldown = CHARACTER_SCALING.potions.mpCooldownSec;
         const healMp = Math.round(derived.maxMp * 0.55);
         hero.mp = Math.min(derived.maxMp, hero.mp + healMp);
         spawnFloatingText(
@@ -1716,7 +1782,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         spawnFloatingText(
           hero.x,
           hero.y - 34,
-          '⚠️ Нет Банок МН! Купите за Zen [+5💧]',
+          '⚠️ Нет Банок МН! Купите в Лавке [B]',
           '#38bdf8',
           1.15
         );
@@ -1748,8 +1814,20 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             soundEngine.playLevelUp();
             continue;
           }
+
+          if (wsConnectedRef.current && callbacksRef.current.onPartyPickupGroundItem) {
+            // Online: request atomic server-side claim (prevents duplicates & applies party finder/random loot mode)
+            const retryAfter = pendingServerPickupUntil.get(drop.id) ?? 0;
+            if (nowWall >= retryAfter) {
+              pendingServerPickupUntil.set(drop.id, nowWall + 600);
+              callbacksRef.current.onPartyPickupGroundItem(drop.id);
+            }
+            remaining.push(drop);
+            continue;
+          }
+
+          // Offline single-player fallback
           callbacksRef.current.onLootCollected(drop);
-          callbacksRef.current.onPartyPickupGroundItem?.(drop.id);
           spawnFloatingText(drop.x, drop.y - 12, `+${drop.label}`, drop.rarityColor, 1.05);
           spawnParticles(drop.x, drop.y, 8, drop.rarityColor, 30, 95, 3, 0.35);
           if (drop.type === 'zen') {
@@ -1835,6 +1913,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       triggerPrimaryAttack: executePrimaryAttack,
       triggerSkill: executeSkill,
       triggerHpPotion: () => executeHpPotion(false),
+      triggerLargeHpPotion: () => executeLargeHpPotion(false),
       triggerMpPotion: () => executeMpPotion(false),
       triggerPickupNearbyLoot: () => collectNearbyLoot(340, true),
       triggerDash: executeDash,
@@ -1934,6 +2013,21 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           elapsed: 0,
           duration: 0.42,
         });
+
+        // 125m proximity audio for remote player attacks & skills
+        if (isAudibleAt(attack.x, attack.y)) {
+          if (attack.pattern === 'primary') {
+            soundEngine.playAttack(
+              attack.classId === 'dark_knight'
+                ? 'slash'
+                : attack.classId === 'dark_wizard'
+                  ? 'magic'
+                  : 'arrow'
+            );
+          } else {
+            soundEngine.playSkillCast(attack.pattern);
+          }
+        }
 
         // In regular territories with server-authoritative HP, HP deduction comes strictly from party:monster_hp / party:monster_killed
         if (!attack.inBloodCastle && wsConnectedRef.current) {
@@ -2123,9 +2217,14 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             4,
             0.55
           );
-          soundEngine.playEnemyDeath(event.isBoss);
+          if (isAudibleAt(dropX, dropY)) {
+            soundEngine.playEnemyDeath(event.isBoss);
+          }
         } else {
           spawnParticles(dropX, dropY, event.isBoss ? 24 : 12, '#34d399', 50, 180, 3.8, 0.48);
+          if (isAudibleAt(dropX, dropY)) {
+            soundEngine.playEnemyDeath(event.isBoss);
+          }
         }
 
         if (event.killerId === partySelfIdRef.current) {
@@ -2148,13 +2247,16 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           bossSpawnedForTerritory = false;
         }
 
-        spawnLootForKilledMonster(
-          dropX,
-          dropY,
-          event.isBoss,
-          event.zenReward,
-          event.isQuestMonster
-        );
+        // When online, ground loot is generated authoritatively by server.ts (`party:ground_loot_spawned`)
+        if (!wsConnectedRef.current) {
+          spawnLootForKilledMonster(
+            dropX,
+            dropY,
+            event.isBoss,
+            event.zenReward,
+            event.isQuestMonster
+          );
+        }
       },
       applyServerMonsterRespawned: (event: ServerMonsterRespawnedEvent) => {
         const pState = playerRef.current;
@@ -2193,7 +2295,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             '#facc15',
             1.3
           );
-          soundEngine.playGoldenBossInvasion();
+          if (isAudibleAt(entity.x, entity.y)) {
+            soundEngine.playGoldenBossInvasion();
+          }
         }
       },
       applyServerMonsterAttack: (event: ServerMonsterAttackEvent) => {
@@ -2254,18 +2358,25 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             4,
             0.55
           );
-          soundEngine.playEnemyDeath(kill.isBoss);
+          if (isAudibleAt(dropX, dropY)) {
+            soundEngine.playEnemyDeath(kill.isBoss);
+          }
         } else {
           spawnParticles(dropX, dropY, kill.isBoss ? 24 : 12, '#34d399', 50, 180, 3.8, 0.48);
+          if (isAudibleAt(dropX, dropY)) {
+            soundEngine.playEnemyDeath(kill.isBoss);
+          }
         }
 
-        spawnLootForKilledMonster(
-          dropX,
-          dropY,
-          kill.isBoss,
-          Math.max(40, Math.round(kill.zenShare * 1.8)),
-          isQuestMob
-        );
+        if (!wsConnectedRef.current) {
+          spawnLootForKilledMonster(
+            dropX,
+            dropY,
+            kill.isBoss,
+            Math.max(40, Math.round(kill.zenShare * 1.8)),
+            isQuestMob
+          );
+        }
       },
       dropEquipmentOnGround: (item: EquipmentItem): LootDrop => {
         const nowWall = Date.now();
@@ -2301,7 +2412,33 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       },
       syncServerGroundLoot: (drops: LootDrop[]) => {
         const nowWall = Date.now();
+        const nextDrops: LootDrop[] = [];
+        const seenIds = new Set<string>();
+        // Keep Archangel weapon if active in Blood Castle
+        for (const existing of lootDrops) {
+          if (existing.type === 'archangel_weapon') {
+            nextDrops.push(existing);
+            seenIds.add(existing.id);
+          }
+        }
+        for (const d of drops) {
+          if (!d || typeof d.id !== 'string' || seenIds.has(d.id)) continue;
+          if (isGroundLootExpired(d, nowWall)) continue;
+          nextDrops.push({
+            ...d,
+            spawnTime: d.spawnTime || nowWall,
+            expiresAtMs: d.expiresAtMs || nowWall + GROUND_LOOT_TTL_MS,
+          });
+          seenIds.add(d.id);
+        }
+        lootDrops = nextDrops;
+      },
+      addServerGroundLootBatch: (drops: LootDrop[]) => {
+        const nowWall = Date.now();
         const existingIds = new Set(lootDrops.map((d) => d.id));
+        let playedZen = false;
+        let playedJewel = false;
+        let playedEquip = false;
         for (const d of drops) {
           if (!d || typeof d.id !== 'string' || existingIds.has(d.id)) continue;
           if (isGroundLootExpired(d, nowWall)) continue;
@@ -2311,6 +2448,39 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             expiresAtMs: d.expiresAtMs || nowWall + GROUND_LOOT_TTL_MS,
           });
           existingIds.add(d.id);
+
+          const audible = isAudibleAt(d.x, d.y);
+          if (d.type === 'zen') {
+            if (audible && !playedZen) {
+              soundEngine.playZenDrop();
+              playedZen = true;
+            }
+          } else if (d.type.startsWith('jewel_')) {
+            spawnFloatingText(d.x, d.y - 36, `✦ КАМЕНЬ: ${d.label}!`, d.rarityColor, 1.2);
+            if (audible && !playedJewel) {
+              soundEngine.playJewelDrop();
+              playedJewel = true;
+            }
+          } else if (d.type === 'blood_scroll' || d.type === 'blood_fang') {
+            spawnFloatingText(d.x, d.y - 42, `🩸 ${d.label}!`, d.rarityColor, 1.18);
+            if (audible && !playedJewel) {
+              soundEngine.playJewelDrop();
+              playedJewel = true;
+            }
+          } else if (d.type === 'equipment') {
+            const isRare =
+              d.equipment?.rarity === 'ancient' || d.equipment?.rarity === 'excellent';
+            spawnFloatingText(d.x, d.y - 46, `✦ ТРОФЕЙ: ${d.label}!`, d.rarityColor, 1.22);
+            if (audible && !playedEquip) {
+              soundEngine.playEquipmentDrop(Boolean(isRare));
+              playedEquip = true;
+            }
+          } else if (d.type === 'quest_item') {
+            spawnFloatingText(d.x, d.y - 54, `${d.label}!`, '#f59e0b', 1.32);
+            if (audible) {
+              soundEngine.playLevelUp();
+            }
+          }
         }
       },
       addRemoteGroundLoot: (drop: LootDrop) => {
@@ -2331,21 +2501,31 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           drop.rarityColor,
           1.12
         );
-        soundEngine.playEquipmentDrop(false);
+        if (isAudibleAt(drop.x, drop.y)) {
+          soundEngine.playEquipmentDrop(false);
+        }
       },
-      removeRemoteGroundLoot: (dropId: string, pickerNickname?: string) => {
+      removeRemoteGroundLoot: (
+        dropId: string,
+        pickerNickname?: string,
+        recipientNickname?: string,
+        lootMode?: PartyLootMode
+      ) => {
         const target = lootDrops.find((d) => d.id === dropId);
+        pendingServerPickupUntil.delete(dropId);
         if (!target) return;
         lootDrops = lootDrops.filter((d) => d.id !== dropId);
         localDropGraceUntil.delete(dropId);
+        spawnParticles(target.x, target.y, 8, target.rarityColor, 26, 90, 3, 0.32);
         if (pickerNickname) {
-          spawnFloatingText(
-            target.x,
-            target.y - 18,
-            `🤝 ${pickerNickname} поднял ${target.label}`,
-            '#5eead4',
-            1.02
-          );
+          const text =
+            lootMode === 'random' && recipientNickname && recipientNickname !== pickerNickname
+              ? `🎲 ${target.label} → ${recipientNickname}`
+              : `🤝 ${pickerNickname} поднял ${target.label}`;
+          spawnFloatingText(target.x, target.y - 18, text, '#5eead4', 1.02);
+          if (isAudibleAt(target.x, target.y)) {
+            soundEngine.playLootPickup();
+          }
         }
       },
       setLocalChatBubble: (text: string) => {
@@ -2384,6 +2564,8 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           executeSkill(3);
         } else if (code === 'KeyQ') {
           executeHpPotion(false);
+        } else if (code === 'KeyZ') {
+          executeLargeHpPotion(false);
         } else if (code === 'KeyE') {
           executeMpPotion(false);
         } else if (code === 'KeyF') {
@@ -2625,8 +2807,15 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
 
         // Auto-Potion consumption when Auto-Hunt []] is enabled at Level 5+
         if (autoHuntRef.current && pState.level >= 5 && !inSanctuary) {
-          if (hero.hp <= derived.maxHp * 0.58) {
-            executeHpPotion(true);
+          const missingHp = derived.maxHp - hero.hp;
+          if (hero.hp <= derived.maxHp * 0.62) {
+            if (missingHp >= 420 && (pState.largeHpPotions ?? 0) > 0) {
+              executeLargeHpPotion(true);
+            } else if (pState.hpPotions > 0) {
+              executeHpPotion(true);
+            } else if ((pState.largeHpPotions ?? 0) > 0) {
+              executeLargeHpPotion(true);
+            }
           }
           if (hero.mp <= derived.maxMp * 0.35) {
             executeMpPotion(true);

@@ -1,5 +1,6 @@
 import { CHARACTER_SCALING, MONSTER_RESPAWN_CONFIG, SERVER_CONFIG } from '../config';
 import {
+  ActivePartyState,
   BloodCastleStage,
   CharacterClassId,
   ClassTier,
@@ -10,6 +11,7 @@ import {
   ItemSlot,
   LootDrop,
   LootDropType,
+  PartyLootMode,
   PartyMemberState,
   PlayerProgressState,
   PlayerTradeSession,
@@ -22,9 +24,13 @@ import {
 
 export { GROUND_LOOT_TTL_MS };
 export const MAX_PARTY_SIZE = SERVER_CONFIG.maxPartySize;
+export const MAX_WORLD_PLAYERS = SERVER_CONFIG.maxWorldPlayersPerRoom;
 export const DEFAULT_PARTY_ROOM = SERVER_CONFIG.defaultPartyRoom;
 export const MAX_SHARED_MONSTERS = SERVER_CONFIG.maxSharedMonstersPerZone;
 export const INDIVIDUAL_MONSTER_RESPAWN_SEC = MONSTER_RESPAWN_CONFIG.fallbackIndividualRespawnSec;
+export const WORLD_UNITS_PER_METER = SERVER_CONFIG.worldUnitsPerMeter;
+export const PARTY_EXP_RANGE_METERS = SERVER_CONFIG.partyExpShareRangeMeters;
+export const SOUND_HEARING_RANGE_METERS = SERVER_CONFIG.soundHearingRangeMeters;
 
 /**
  * Persistent MU Continent Epoch (runs continuously on real UTC wall-clock time
@@ -245,6 +251,146 @@ export function sanitizeSkillPattern(
     return raw as SkillDefinition['pattern'] | 'primary';
   }
   return null;
+}
+
+export function sanitizePartyLootMode(raw: unknown): PartyLootMode {
+  return raw === 'random' ? 'random' : 'finder';
+}
+
+/**
+ * Converts world coordinate delta (px) into meters (10 world units = 1 meter).
+ */
+export function worldDistanceToMeters(dx: number, dy: number): number {
+  if (!Number.isFinite(dx) || !Number.isFinite(dy)) return Infinity;
+  return Math.hypot(dx, dy) / WORLD_UNITS_PER_METER;
+}
+
+/**
+ * Checks whether two world points (ax, ay) and (bx, by) are within `maxMeters` (inclusive).
+ */
+export function isWithinMeters(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  maxMeters: number
+): boolean {
+  if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) {
+    return false;
+  }
+  const maxWorldUnits = Math.max(0, maxMeters) * WORLD_UNITS_PER_METER;
+  const dx = ax - bx;
+  const dy = ay - by;
+  return dx * dx + dy * dy <= maxWorldUnits * maxWorldUnits;
+}
+
+/**
+ * Spatial hearing check: monster kills, skills, loot drops, and pickups are only audible
+ * within 125 meters of the local hero.
+ */
+export function isSoundAudibleAt(
+  listenerX: number,
+  listenerY: number,
+  sourceX: number,
+  sourceY: number,
+  maxMeters = SOUND_HEARING_RANGE_METERS
+): boolean {
+  return isWithinMeters(listenerX, listenerY, sourceX, sourceY, maxMeters);
+}
+
+/**
+ * Determines which players are eligible to receive EXP when `killerId` kills a monster:
+ * - Killer always receives EXP.
+ * - If killer is NOT in a manually formed party -> ONLY the killer receives EXP (no auto-party!).
+ * - If killer IS in a formed party -> party allies in the same zone (territoryId + inBloodCastle)
+ *   AND within `maxMeters` (default 125m) of the killer receive shared party EXP.
+ */
+export function getEligiblePartyExpRecipients(
+  party: ActivePartyState | null,
+  allMembers: Map<string, PartyMemberState> | Iterable<PartyMemberState>,
+  killerId: string,
+  maxMeters = PARTY_EXP_RANGE_METERS
+): { recipientIds: string[]; nearbyAlliesCount: number } {
+  const memberMap: Map<string, PartyMemberState> =
+    allMembers instanceof Map
+      ? allMembers
+      : new Map(Array.from(allMembers, (m) => [m.id, m]));
+
+  const killer = memberMap.get(killerId);
+  if (!killer) {
+    return { recipientIds: [killerId], nearbyAlliesCount: 0 };
+  }
+  if (!party || !party.memberIds.includes(killerId)) {
+    return { recipientIds: [killerId], nearbyAlliesCount: 0 };
+  }
+
+  const recipientIds: string[] = [killerId];
+  let nearbyAlliesCount = 0;
+
+  for (const memberId of party.memberIds) {
+    if (memberId === killerId) continue;
+    const ally = memberMap.get(memberId);
+    if (!ally) continue;
+    const sameZone = killer.inBloodCastle
+      ? Boolean(ally.inBloodCastle)
+      : !ally.inBloodCastle && ally.territoryId === killer.territoryId;
+    if (!sameZone) continue;
+    if (isWithinMeters(killer.x, killer.y, ally.x, ally.y, maxMeters)) {
+      recipientIds.push(ally.id);
+      nearbyAlliesCount += 1;
+    }
+  }
+
+  return { recipientIds, nearbyAlliesCount };
+}
+
+/**
+ * Resolves who receives a picked-up ground loot drop according to party loot settings:
+ * - Solo player or party lootMode === 'finder' -> always the picker (`pickerId`).
+ * - Party lootMode === 'random' -> uniformly chooses among party members in the same zone
+ *   within `maxMeters` (default 125m) of the drop coordinates (always includes picker as fallback).
+ */
+export function resolvePartyLootRecipient(
+  party: ActivePartyState | null,
+  allMembers: Map<string, PartyMemberState> | Iterable<PartyMemberState>,
+  pickerId: string,
+  dropX: number,
+  dropY: number,
+  zoneTerritoryId: TerritoryId,
+  zoneInBloodCastle: boolean,
+  rng: () => number = Math.random,
+  maxMeters = PARTY_EXP_RANGE_METERS
+): string {
+  if (!party || party.lootMode !== 'random' || !party.memberIds.includes(pickerId)) {
+    return pickerId;
+  }
+
+  const memberMap: Map<string, PartyMemberState> =
+    allMembers instanceof Map
+      ? allMembers
+      : new Map(Array.from(allMembers, (m) => [m.id, m]));
+
+  const candidates: string[] = [];
+  for (const memberId of party.memberIds) {
+    const member = memberMap.get(memberId);
+    if (!member) continue;
+    const sameZone = zoneInBloodCastle
+      ? Boolean(member.inBloodCastle)
+      : !member.inBloodCastle && member.territoryId === zoneTerritoryId;
+    if (!sameZone) continue;
+    if (memberId === pickerId || isWithinMeters(dropX, dropY, member.x, member.y, maxMeters)) {
+      candidates.push(memberId);
+    }
+  }
+
+  if (candidates.length === 0) {
+    return pickerId;
+  }
+
+  const rawRoll = rng();
+  const clamped = Number.isFinite(rawRoll) ? Math.max(0, Math.min(0.999999, rawRoll)) : 0;
+  const idx = Math.floor(clamped * candidates.length);
+  return candidates[idx] ?? pickerId;
 }
 
 /**
