@@ -127,7 +127,7 @@ export const DROP_RATES = {
     bossFangMax: 0.7,
   },
 
-  /** Машина Хаоса (Chaos Machine) — крафт крыльев и билета Blood Castle */
+  /** Машина Хаоса (Chaos Machine) — крафт крыльев, заточка крыльев и билет Blood Castle */
   chaosMachine: {
     /** Шанс успешной варки билета Blood Castle (80%) */
     bloodCastleTicketSuccessRate: 0.8,
@@ -135,6 +135,23 @@ export const DROP_RATES = {
     wingsCraftZenCost: 800,
     /** Количество Jewel of Chaos на синтез Крыльев */
     wingsCraftChaosCost: 1,
+    /** Заточка Крыльев в Машине Хаоса (только за набор Bless + Soul + Chaos и никак иначе) */
+    wingUpgrade: {
+      /** Заточка на +1..+9: 1 Bless + 1 Soul + 1 Chaos */
+      lowTierMaxTargetLevel: 9,
+      lowTierJewelCost: {
+        bless: 1,
+        soul: 1,
+        chaos: 1,
+      },
+      /** Заточка на +10 и выше (+10..+15): 3 Bless + 3 Soul + 3 Chaos */
+      highTierMinTargetLevel: 10,
+      highTierJewelCost: {
+        bless: 3,
+        soul: 3,
+        chaos: 3,
+      },
+    },
   },
 
   /** Заточка вещей камнями (Bless / Soul / Life) */

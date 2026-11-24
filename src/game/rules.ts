@@ -1721,21 +1721,153 @@ export function performGrandReset(
   };
 }
 
+export interface WingChaosUpgradeCost {
+  currentLevel: number;
+  nextLevel: number;
+  isMaxLevel: boolean;
+  isHighTier: boolean;
+  bless: number;
+  soul: number;
+  chaos: number;
+}
+
+export function getWingChaosUpgradeCost(currentLevel: number): WingChaosUpgradeCost {
+  const maxLevel = DROP_RATES.itemUpgrades.maxItemLevel;
+  const clampedCurrent = Math.max(0, Math.min(maxLevel, Math.floor(currentLevel || 0)));
+  const isMaxLevel = clampedCurrent >= maxLevel;
+  const nextLevel = isMaxLevel ? maxLevel : clampedCurrent + 1;
+  const wu = DROP_RATES.chaosMachine.wingUpgrade;
+  const isHighTier = nextLevel >= wu.highTierMinTargetLevel;
+  const cost = isHighTier ? wu.highTierJewelCost : wu.lowTierJewelCost;
+  return {
+    currentLevel: clampedCurrent,
+    nextLevel,
+    isMaxLevel,
+    isHighTier,
+    bless: cost.bless,
+    soul: cost.soul,
+    chaos: cost.chaos,
+  };
+}
+
+export function upgradeWingsInChaosMachine(
+  state: PlayerProgressState,
+  itemId?: string
+): {
+  nextState: PlayerProgressState;
+  success: boolean;
+  message: string;
+  upgradedWings?: EquipmentItem;
+} {
+  let targetItem: EquipmentItem | null = null;
+  let isEquippedWings = false;
+
+  if (itemId) {
+    if (state.equipped.wings?.id === itemId) {
+      targetItem = state.equipped.wings;
+      isEquippedWings = true;
+    } else {
+      const equippedMatch = (['weapon', 'armor', 'helm', 'ring', 'pendant'] as ItemSlot[]).find(
+        (slot) => state.equipped[slot]?.id === itemId
+      );
+      if (equippedMatch) {
+        targetItem = state.equipped[equippedMatch];
+      } else {
+        targetItem = state.inventory.find((i) => i.id === itemId) ?? null;
+      }
+    }
+  } else if (state.equipped.wings) {
+    targetItem = state.equipped.wings;
+    isEquippedWings = true;
+  } else {
+    targetItem = state.inventory.find((i) => i.slot === 'wings') ?? null;
+  }
+
+  if (!targetItem) {
+    return {
+      nextState: state,
+      success: false,
+      message: 'Крылья для улучшения в Машине Хаоса не найдены.',
+    };
+  }
+
+  if (targetItem.slot !== 'wings') {
+    return {
+      nextState: state,
+      success: false,
+      message: 'Комбинация Bless + Soul + Chaos предназначена только для улучшения Крыльев в Машине Хаоса!',
+    };
+  }
+
+  const cost = getWingChaosUpgradeCost(targetItem.level);
+  if (cost.isMaxLevel) {
+    return {
+      nextState: state,
+      success: false,
+      message: `${targetItem.name} уже достигли максимального уровня +${cost.currentLevel}!`,
+    };
+  }
+
+  if (
+    state.jewels.bless < cost.bless ||
+    state.jewels.soul < cost.soul ||
+    state.jewels.chaos < cost.chaos
+  ) {
+    return {
+      nextState: state,
+      success: false,
+      message: `Для улучшения крыльев на +${cost.nextLevel} у Машины Хаоса требуется ${cost.bless} Bless, ${cost.soul} Soul и ${cost.chaos} Chaos (у вас: B:${state.jewels.bless} S:${state.jewels.soul} C:${state.jewels.chaos}).`,
+    };
+  }
+
+  const upg = DROP_RATES.itemUpgrades;
+  const updatedWings: EquipmentItem = {
+    ...targetItem,
+    level: cost.nextLevel,
+    valueZen: Math.round(targetItem.valueZen * upg.valueMultiplierOnLevelUp),
+  };
+
+  const nextJewels = {
+    ...state.jewels,
+    bless: state.jewels.bless - cost.bless,
+    soul: state.jewels.soul - cost.soul,
+    chaos: state.jewels.chaos - cost.chaos,
+  };
+
+  if (isEquippedWings) {
+    return {
+      nextState: {
+        ...state,
+        jewels: nextJewels,
+        equipped: {
+          ...state.equipped,
+          wings: updatedWings,
+        },
+      },
+      success: true,
+      message: `Машина Хаоса: ${updatedWings.name} улучшены до +${updatedWings.level} за ${cost.bless} Bless + ${cost.soul} Soul + ${cost.chaos} Chaos (+${updatedWings.level}% к макс. скорости)!`,
+      upgradedWings: updatedWings,
+    };
+  }
+
+  return {
+    nextState: {
+      ...state,
+      jewels: nextJewels,
+      inventory: state.inventory.map((i) => (i.id === targetItem!.id ? updatedWings : i)),
+    },
+    success: true,
+    message: `Машина Хаоса: ${updatedWings.name} улучшены до +${updatedWings.level} за ${cost.bless} Bless + ${cost.soul} Soul + ${cost.chaos} Chaos (+${updatedWings.level}% к макс. скорости)!`,
+    upgradedWings: updatedWings,
+  };
+}
+
 export function upgradeItemWithJewel(
   state: PlayerProgressState,
   itemId: string,
   jewelType: 'bless' | 'soul' | 'life',
   deterministicRoll = 0.25
 ): { nextState: PlayerProgressState; success: boolean; message: string } {
-  if (state.jewels[jewelType] <= 0) {
-    const names = { bless: 'Jewel of Bless', soul: 'Jewel of Soul', life: 'Jewel of Life' };
-    return {
-      nextState: state,
-      success: false,
-      message: `Недостаточно камней (${names[jewelType]}).`,
-    };
-  }
-
   let targetItem: EquipmentItem | null = null;
   let equippedSlot: ItemSlot | null = null;
 
@@ -1752,6 +1884,24 @@ export function upgradeItemWithJewel(
 
   if (!targetItem) {
     return { nextState: state, success: false, message: 'Предмет не найден.' };
+  }
+
+  if ((targetItem as EquipmentItem).slot === 'wings') {
+    const wingCost = getWingChaosUpgradeCost((targetItem as EquipmentItem).level);
+    return {
+      nextState: state,
+      success: false,
+      message: `Крылья можно улучшить только у Машины Хаоса [K] за ${wingCost.bless} Bless, ${wingCost.soul} Soul и ${wingCost.chaos} Chaos (до +9 — по 1 камню; на +10 и выше — по 3 камня) и никак иначе!`,
+    };
+  }
+
+  if (state.jewels[jewelType] <= 0) {
+    const names = { bless: 'Jewel of Bless', soul: 'Jewel of Soul', life: 'Jewel of Life' };
+    return {
+      nextState: state,
+      success: false,
+      message: `Недостаточно камней (${names[jewelType]}).`,
+    };
   }
 
   const upg = DROP_RATES.itemUpgrades;
@@ -1860,6 +2010,15 @@ export function upgradeItemWithJewel(
 export function craftChaosWings(
   state: PlayerProgressState
 ): { nextState: PlayerProgressState; success: boolean; message: string; craftedWings?: EquipmentItem } {
+  if (state.equipped.wings?.rarity === 'ancient') {
+    return {
+      nextState: state,
+      success: false,
+      message:
+        'У вас уже выкованы Древние Крылья 3-го уровня! Улучшайте их уровень (+1..+15) у Машины Хаоса за Bless + Soul + Chaos.',
+    };
+  }
+
   const zenCost = DROP_RATES.chaosMachine.wingsCraftZenCost;
   const chaosCost = DROP_RATES.chaosMachine.wingsCraftChaosCost;
   if (state.jewels.chaos < chaosCost) {
@@ -1893,7 +2052,7 @@ export function craftChaosWings(
     name: hasTier2Wings ? wingNamesTier3[state.classId] : wingNamesTier2[state.classId],
     slot: 'wings',
     rarity: hasTier2Wings ? 'ancient' : 'excellent',
-    level: Math.min(15, currentWingLevel + 2),
+    level: hasTier2Wings ? currentWingLevel : 0,
     lifeOption: hasTier2Wings ? 12 : 8,
     baseAttack: hasTier2Wings ? 42 : 26,
     baseDefense: hasTier2Wings ? 36 : 22,

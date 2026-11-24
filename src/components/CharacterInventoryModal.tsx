@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import {
-  resolveArmorSetVisualStyle,
-  resolveWeaponVisualStyle,
+  formatShortInventoryItemLabel,
 } from '../game/models';
 import {
   calculateDerivedStats,
@@ -10,7 +9,6 @@ import {
   getFirstProfQuestItemName,
 } from '../game/rules';
 import {
-  CharacterClassId,
   EquipmentItem,
   ItemRarity,
   ItemSlot,
@@ -22,6 +20,10 @@ import {
   HoverTooltipState,
   ItemHoverTooltip,
 } from './ItemHoverTooltip';
+import {
+  EquipmentItemIcon,
+  SpecialInventoryIcon,
+} from './ItemIcon';
 
 interface CharacterInventoryModalProps {
   player: PlayerProgressState;
@@ -81,418 +83,6 @@ function getRarityTextClass(rarity?: ItemRarity): string {
   if (rarity === 'magic') return 'text-sky-300';
   return 'text-[#f3efe6]';
 }
-
-function inferItemClassId(item?: EquipmentItem | null): CharacterClassId {
-  const n = item?.name ?? '';
-  if (/Посох|Жезл|Скипетр|Мантия|Роба|Одеяние|Венец|Повязка|Тиара Атланса|Анубиса|Кундуна|Ахерона/i.test(n)) {
-    return 'dark_wizard';
-  }
-  if (/Лук|Арбалет|Туника|Обруч|Сирены|Валькирии|Сильфиды|Никси|Крайвульфа|Красного Духа/i.test(n)) {
-    return 'fairy_elf';
-  }
-  return 'dark_knight';
-}
-
-const SlotSvgIcon: React.FC<{
-  slot: ItemSlot;
-  rarity?: ItemRarity;
-  item?: EquipmentItem | null;
-  className?: string;
-}> = ({ slot, rarity, item, className = 'h-7 w-7' }) => {
-  const effectiveRarity = item?.rarity ?? rarity;
-  const isExe = effectiveRarity === 'excellent';
-  const isAnc = effectiveRarity === 'ancient';
-  const lvl = item?.level ?? 0;
-  const hasWhiteSheen = lvl >= 10;
-  const whiteSheenOpacity = hasWhiteSheen ? Math.min(0.32, 0.16 + (lvl - 10) * 0.03) : 0;
-  const glowClass = isAnc
-    ? ' drop-shadow-[0_0_6px_rgba(192,132,252,0.82)]'
-    : isExe
-      ? ' drop-shadow-[0_0_6px_rgba(52,211,153,0.82)]'
-      : lvl >= 6
-        ? ' drop-shadow-[0_0_5px_rgba(255,255,255,0.45)]'
-        : '';
-  const svgClass = `${className}${glowClass}`;
-  const fallbackColor =
-    effectiveRarity === 'ancient'
-      ? '#c084fc'
-      : effectiveRarity === 'excellent'
-        ? '#34d399'
-        : effectiveRarity === 'magic'
-          ? '#38bdf8'
-          : '#9ca3af';
-  const name = item?.name ?? '';
-  const itemClassId = inferItemClassId(item);
-
-  if (slot === 'weapon') {
-    const wStyle = item ? resolveWeaponVisualStyle(itemClassId, item) : null;
-    const primary = wStyle ? wStyle.bladePrimary : fallbackColor;
-    const secondary = wStyle ? wStyle.bladeSecondary : fallbackColor;
-    const guard = wStyle ? wStyle.guardColor : '#fde047';
-    const gem = wStyle ? wStyle.gemColor : fallbackColor;
-    const shaft = wStyle ? wStyle.shaftColor : '#d97706';
-
-    if (/Посох|Жезл|Скипетр/i.test(name)) {
-      const isWandOrScepter = /Жезл|Скипетр/i.test(name);
-      return (
-        <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
-          <line x1="6" y1="26" x2="22" y2="10" stroke={shaft} strokeWidth="2.6" strokeLinecap="round" />
-          {isWandOrScepter ? (
-            <polygon
-              points="23,4 28,9 23,14 18,9"
-              fill={primary}
-              fillOpacity="0.45"
-              stroke={guard}
-              strokeWidth="1.6"
-            />
-          ) : (
-            <path
-              d="M18 6 C24 3 29 8 26 14"
-              fill="none"
-              stroke={guard}
-              strokeWidth="2.1"
-              strokeLinecap="round"
-            />
-          )}
-          <circle cx="23.5" cy="8.5" r="3.3" fill={gem} stroke="#ffffff" strokeWidth="1.2" />
-          {hasWhiteSheen && (
-            <line
-              x1="10"
-              y1="21"
-              x2="24"
-              y2="7"
-              stroke="#ffffff"
-              strokeOpacity={whiteSheenOpacity}
-              strokeWidth="2.2"
-              strokeLinecap="round"
-            />
-          )}
-        </svg>
-      );
-    }
-    if (/Арбалет/i.test(name)) {
-      return (
-        <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
-          <line x1="6" y1="26" x2="24" y2="8" stroke={shaft} strokeWidth="2.5" strokeLinecap="round" />
-          <path
-            d="M9 8 C17 6 26 15 24 23"
-            fill="none"
-            stroke={primary}
-            strokeWidth="2.6"
-            strokeLinecap="round"
-          />
-          <line x1="9" y1="8" x2="24" y2="23" stroke={guard} strokeWidth="1.1" />
-          <circle cx="18" cy="14" r="2" fill={gem} />
-          {hasWhiteSheen && (
-            <line
-              x1="11"
-              y1="10"
-              x2="23"
-              y2="20"
-              stroke="#ffffff"
-              strokeOpacity={whiteSheenOpacity}
-              strokeWidth="2"
-              strokeLinecap="round"
-            />
-          )}
-        </svg>
-      );
-    }
-    if (/Лук/i.test(name)) {
-      const isWinged = /Крылатый|Серебряного Крыла|Раклиона/i.test(name);
-      return (
-        <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
-          <path
-            d="M9 5 C21 7 25 11 27 23"
-            fill="none"
-            stroke={primary}
-            strokeWidth="2.6"
-            strokeLinecap="round"
-          />
-          {isWinged && (
-            <path
-              d="M12 7 C20 9 23 12 25 20"
-              fill="none"
-              stroke={guard}
-              strokeWidth="1.3"
-            />
-          )}
-          <line x1="9" y1="5" x2="27" y2="23" stroke="#e2e8f0" strokeWidth="1.1" />
-          <line x1="11" y1="21" x2="24" y2="8" stroke={gem} strokeWidth="1.9" strokeLinecap="round" />
-          {hasWhiteSheen && (
-            <line
-              x1="12"
-              y1="6"
-              x2="25"
-              y2="19"
-              stroke="#ffffff"
-              strokeOpacity={whiteSheenOpacity}
-              strokeWidth="2"
-              strokeLinecap="round"
-            />
-          )}
-        </svg>
-      );
-    }
-    if (/Трезубец/i.test(name)) {
-      return (
-        <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
-          <line x1="5" y1="27" x2="23" y2="9" stroke={shaft} strokeWidth="2.3" strokeLinecap="round" />
-          <path
-            d="M17 7 L27 5 L25 15 M21 3 L26 8 L29 11"
-            fill="none"
-            stroke={primary}
-            strokeWidth="2.1"
-            strokeLinecap="round"
-          />
-          <circle cx="21" cy="11" r="1.8" fill={gem} />
-        </svg>
-      );
-    }
-    if (/Коса/i.test(name)) {
-      return (
-        <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
-          <line x1="6" y1="27" x2="24" y2="7" stroke={shaft} strokeWidth="2.4" strokeLinecap="round" />
-          <path
-            d="M21 6 C29 8 30 17 23 22 C24 15 22 11 18 9 Z"
-            fill={primary}
-            stroke={guard}
-            strokeWidth="1.4"
-          />
-        </svg>
-      );
-    }
-    const isHeavyBlade = /Разрушения|Заикана|Феникса|Бездны|Королевский|Архангела/i.test(name);
-    return (
-      <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
-        <path
-          d={isHeavyBlade ? 'M25 3 L29 7 L14 22 L8 22 L8 16 Z' : 'M25 4 L28 7 L13 22 L9 22 L9 18 Z'}
-          fill={secondary}
-          fillOpacity="0.55"
-          stroke={primary}
-          strokeWidth="2"
-        />
-        <line x1="12" y1="19" x2="25" y2="6" stroke={gem} strokeWidth="1.3" />
-        <path d="M7 16 L16 25 M5 27 L10 22" stroke={guard} strokeWidth="2.4" strokeLinecap="round" />
-        {hasWhiteSheen && (
-          <line
-            x1="11"
-            y1="18"
-            x2="25"
-            y2="5"
-            stroke="#ffffff"
-            strokeOpacity={whiteSheenOpacity}
-            strokeWidth="2.2"
-            strokeLinecap="round"
-          />
-        )}
-      </svg>
-    );
-  }
-  if (slot === 'armor') {
-    const aStyle = item ? resolveArmorSetVisualStyle(itemClassId, item, null) : null;
-    const primary = aStyle ? aStyle.primaryColor : fallbackColor;
-    const trim = aStyle ? aStyle.trimColor : '#fde047';
-    const gem = aStyle ? aStyle.gemColor : '#fef08a';
-    const isRobe = itemClassId === 'dark_wizard';
-    const strokeHighlight = isAnc ? '#c084fc' : isExe ? '#34d399' : trim;
-    return (
-      <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
-        <path
-          d={
-            isRobe
-              ? 'M10 5 L16 8 L22 5 L28 10 L25 16 L22 14 L24 27 L8 27 L10 14 L7 16 L4 10 Z'
-              : 'M10 5 L16 8 L22 5 L28 9 L25 15 L22 14 L22 27 L10 27 L10 14 L7 15 L4 9 Z'
-          }
-          fill={primary}
-          fillOpacity="0.52"
-          stroke={strokeHighlight}
-          strokeWidth="1.9"
-          strokeLinejoin="round"
-        />
-        <path d="M11 11 L16 15 L21 11 M16 9 L16 25" stroke={trim} strokeWidth="1.4" fill="none" />
-        <circle cx="16" cy="14" r="2.1" fill={gem} />
-        {hasWhiteSheen && (
-          <ellipse
-            cx="15"
-            cy="13"
-            rx="5"
-            ry="4"
-            fill="#ffffff"
-            fillOpacity={whiteSheenOpacity}
-          />
-        )}
-      </svg>
-    );
-  }
-  if (slot === 'helm') {
-    const hStyle = item ? resolveArmorSetVisualStyle(itemClassId, null, item) : null;
-    const primary = hStyle ? hStyle.helmPrimaryColor : fallbackColor;
-    const trim = hStyle ? hStyle.helmTrimColor : '#fde047';
-    const gem = hStyle ? hStyle.helmGemColor : '#fef08a';
-    const isCrownOrTiara = /Корона|Диадема|Тиара|Венец|Обруч|Повязка/i.test(name);
-    const strokeHighlight = isAnc ? '#c084fc' : isExe ? '#34d399' : trim;
-    return (
-      <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
-        <path
-          d={
-            isCrownOrTiara
-              ? 'M6 17 L9 8 L13 13 L16 6 L19 13 L23 8 L26 17 Z'
-              : 'M5 8 L10 13 M27 8 L22 13 M16 5 L16 10'
-          }
-          fill={isCrownOrTiara ? primary : 'none'}
-          fillOpacity="0.55"
-          stroke={strokeHighlight}
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        {!isCrownOrTiara && (
-          <path
-            d="M9 15 C9 10 23 10 23 15 L23 25 L18 23 L16 26 L14 23 L9 25 Z"
-            fill={primary}
-            fillOpacity="0.52"
-            stroke={strokeHighlight}
-            strokeWidth="1.9"
-          />
-        )}
-        <circle cx="16" cy={isCrownOrTiara ? '14' : '18'} r="2" fill={gem} />
-        {hasWhiteSheen && (
-          <circle
-            cx="14.5"
-            cy="14.5"
-            r="3.8"
-            fill="#ffffff"
-            fillOpacity={whiteSheenOpacity}
-          />
-        )}
-      </svg>
-    );
-  }
-  if (slot === 'wings') {
-    const isTier3 = effectiveRarity === 'ancient' || /III|Шторма|Вечности|Иллюзии/i.test(name);
-    return (
-      <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
-        <path
-          d="M15 19 C11 6 3 4 2 12 C3 18 8 23 15 23 Z M17 19 C21 6 29 4 30 12 C29 18 24 23 17 23 Z"
-          fill={fallbackColor}
-          fillOpacity="0.38"
-          stroke={fallbackColor}
-          strokeWidth="1.8"
-        />
-        <path
-          d="M14 17 C10 11 5 10 4 15 M18 17 C22 11 27 10 28 15"
-          fill="none"
-          stroke="#fef08a"
-          strokeWidth="1.2"
-        />
-        {isTier3 && (
-          <circle cx="16" cy="14" r="2.2" fill="#fef08a" />
-        )}
-      </svg>
-    );
-  }
-  if (slot === 'ring') {
-    return (
-      <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
-        <circle
-          cx="16"
-          cy="18"
-          r="8"
-          fill="none"
-          stroke={fallbackColor}
-          strokeWidth="2.6"
-        />
-        <polygon points="16,6 20,10 16,13 12,10" fill="#fde047" />
-      </svg>
-    );
-  }
-  return (
-    <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
-      <path d="M10 6 C10 14 22 14 22 6" fill="none" stroke="#d4a853" strokeWidth="1.8" />
-      <polygon
-        points="16,12 22,19 16,27 10,19"
-        fill={fallbackColor}
-        fillOpacity="0.35"
-        stroke={fallbackColor}
-        strokeWidth="2"
-      />
-    </svg>
-  );
-};
-
-const JewelSvgIcon: React.FC<{
-  jewel: 'bless' | 'soul' | 'life' | 'chaos' | 'potion_hp' | 'potion_large_hp' | 'potion_mp' | 'quest';
-}> = ({ jewel }) => {
-  const colorMap = {
-    bless: { fill: '#c084fc', stroke: '#fde047' },
-    soul: { fill: '#38bdf8', stroke: '#e0f2fe' },
-    life: { fill: '#fbbf24', stroke: '#fef08a' },
-    chaos: { fill: '#34d399', stroke: '#fde047' },
-    potion_hp: { fill: '#f43f5e', stroke: '#fecdd3' },
-    potion_large_hp: { fill: '#dc2626', stroke: '#fde047' },
-    potion_mp: { fill: '#38bdf8', stroke: '#bae6fd' },
-    quest: { fill: '#f59e0b', stroke: '#fef08a' },
-  };
-  const c = colorMap[jewel];
-
-  if (jewel === 'potion_large_hp') {
-    return (
-      <svg viewBox="0 0 32 32" className="h-7 w-7" aria-hidden="true">
-        <rect x="12" y="3" width="8" height="4" rx="1" fill="#f59e0b" />
-        <path
-          d="M11 7 L21 7 L22 11 L26 19 C27 24 23 28 16 28 C9 28 5 24 6 19 L10 11 Z"
-          fill={c.fill}
-          fillOpacity="0.65"
-          stroke={c.stroke}
-          strokeWidth="2"
-        />
-        <path d="M16 15 L16 23 M12 19 L20 19" stroke="#fef08a" strokeWidth="2.2" strokeLinecap="round" />
-      </svg>
-    );
-  }
-
-  if (jewel === 'potion_hp' || jewel === 'potion_mp') {
-    return (
-      <svg viewBox="0 0 32 32" className="h-7 w-7" aria-hidden="true">
-        <path
-          d="M13 5 L19 5 L18 11 L24 19 C25 23 22 27 16 27 C10 27 7 23 8 19 L14 11 Z"
-          fill={c.fill}
-          fillOpacity="0.5"
-          stroke={c.stroke}
-          strokeWidth="2"
-        />
-      </svg>
-    );
-  }
-
-  if (jewel === 'quest') {
-    return (
-      <svg viewBox="0 0 32 32" className="h-7 w-7" aria-hidden="true">
-        <polygon
-          points="16,3 20,11 29,12 22,18 24,27 16,23 8,27 10,18 3,12 12,11"
-          fill={c.fill}
-          fillOpacity="0.55"
-          stroke={c.stroke}
-          strokeWidth="2"
-        />
-      </svg>
-    );
-  }
-
-  return (
-    <svg viewBox="0 0 32 32" className="h-7 w-7" aria-hidden="true">
-      <polygon
-        points="16,4 26,12 22,26 10,26 6,12"
-        fill={c.fill}
-        fillOpacity="0.45"
-        stroke={c.stroke}
-        strokeWidth="2"
-      />
-      <polygon points="16,8 21,14 16,22 11,14" fill={c.stroke} fillOpacity="0.65" />
-    </svg>
-  );
-};
 
 export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = ({
   player,
@@ -875,8 +465,14 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
         </div>
 
         <div className="flex items-center gap-2 min-w-0">
-          <div className="shrink-0 opacity-90">
-            <SlotSvgIcon slot={slot} rarity={item?.rarity} item={item} className="h-6 w-6" />
+          <div className="shrink-0 opacity-95">
+            <EquipmentItemIcon
+              slot={slot}
+              rarity={item?.rarity}
+              item={item}
+              fallbackClassId={player.classId}
+              className="h-7 w-7"
+            />
           </div>
           {item ? (
             <div className="min-w-0 flex-1">
@@ -1109,7 +705,7 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
                             : 'border-purple-400/35 bg-[#191426] hover:border-amber-400/70'
                       }`}
                     >
-                      <JewelSvgIcon jewel={cell.jewel} />
+                      <SpecialInventoryIcon kind={cell.jewel} className="h-7 w-7" />
                       <span className="mt-0.5 max-w-full truncate text-[9px] font-bold text-amber-200">
                         {cell.jewel.toUpperCase()}
                       </span>
@@ -1145,7 +741,7 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
                       aria-label={`Стак Банок ОЗ (+250): ${cell.count} шт.`}
                       className="relative flex h-14 flex-col items-center justify-center rounded-lg border border-rose-500/45 bg-[#1b121a] p-1 select-none hover:border-rose-400"
                     >
-                      <JewelSvgIcon jewel="potion_hp" />
+                      <SpecialInventoryIcon kind="potion_hp" className="h-7 w-7" />
                       <span className="mt-0.5 text-[9px] font-bold text-rose-200">БАНКИ ОЗ</span>
                       <span className="absolute right-1 top-1 rounded bg-black/80 px-1 font-mono-num text-[10px] font-extrabold text-rose-300">
                         ×{cell.count}
@@ -1180,7 +776,7 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
                       aria-label={`Стак Больших Банок ОЗ (+500): ${cell.count} шт.`}
                       className="relative flex h-14 flex-col items-center justify-center rounded-lg border border-amber-400/60 bg-gradient-to-b from-[#28131a] to-[#170e15] p-1 select-none hover:border-amber-300"
                     >
-                      <JewelSvgIcon jewel="potion_large_hp" />
+                      <SpecialInventoryIcon kind="potion_large_hp" className="h-7 w-7" />
                       <span className="mt-0.5 text-[9px] font-bold text-amber-200">БОЛ. ОЗ</span>
                       <span className="absolute right-1 top-1 rounded bg-black/80 px-1 font-mono-num text-[10px] font-extrabold text-amber-300">
                         ×{cell.count}
@@ -1214,7 +810,7 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
                       aria-label={`Стак Банок Маны: ${cell.count} шт.`}
                       className="relative flex h-14 flex-col items-center justify-center rounded-lg border border-sky-500/45 bg-[#111926] p-1 select-none hover:border-sky-400"
                     >
-                      <JewelSvgIcon jewel="potion_mp" />
+                      <SpecialInventoryIcon kind="potion_mp" className="h-7 w-7" />
                       <span className="mt-0.5 text-[9px] font-bold text-sky-200">БАНКИ МН</span>
                       <span className="absolute right-1 top-1 rounded bg-black/80 px-1 font-mono-num text-[10px] font-extrabold text-sky-300">
                         ×{cell.count}
@@ -1253,7 +849,7 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
                           : 'border-amber-500/20 bg-[#15121d] opacity-55'
                       }`}
                     >
-                      <JewelSvgIcon jewel="quest" />
+                      <SpecialInventoryIcon kind="quest" classId={player.classId} className="h-7 w-7" />
                       <span className="mt-0.5 max-w-full truncate text-[8px] font-bold text-amber-200">
                         {cell.hasItem ? '★ КВЕСТ' : 'КВЕСТ 50'}
                       </span>
@@ -1268,6 +864,7 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
                   const { item } = cell;
                   const isSelected =
                     selectedTarget?.kind === 'inventory' && selectedTarget.itemId === item.id;
+                  const shortItemLabel = formatShortInventoryItemLabel(item.name);
 
                   return (
                     <div
@@ -1305,13 +902,19 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
                         item.rarity
                       )} ${isSelected ? 'ring-2 ring-amber-400' : 'hover:border-amber-300'}`}
                     >
-                      <SlotSvgIcon slot={item.slot} rarity={item.rarity} item={item} className="h-6 w-6" />
+                      <EquipmentItemIcon
+                        slot={item.slot}
+                        rarity={item.rarity}
+                        item={item}
+                        fallbackClassId={player.classId}
+                        className="h-7 w-7"
+                      />
                       <span
-                        className={`mt-0.5 max-w-full truncate px-0.5 text-[9px] font-bold ${getRarityTextClass(
+                        className={`mt-0.5 max-w-full truncate px-0.5 text-[8px] font-bold leading-tight ${getRarityTextClass(
                           item.rarity
                         )}`}
                       >
-                        {SLOT_LABELS[item.slot]}
+                        {shortItemLabel}
                       </span>
 
                       <span className="absolute right-1 top-0.5 rounded bg-black/80 px-1 font-mono-num text-[9px] font-extrabold text-amber-300">
@@ -1345,40 +948,86 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
                 );
               })}
             </div>
+
+            {/* Blood Castle Materials & Ticket Mini-Row with Custom Icons */}
+            <div className="mt-2.5 grid grid-cols-3 gap-1.5 border-t border-white/10 pt-2">
+              <div className="flex items-center gap-2 rounded-lg border border-rose-500/30 bg-[#181118] px-2 py-1">
+                <SpecialInventoryIcon kind="blood_scroll" className="h-5 w-5 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[10px] font-bold text-rose-200">Blood Scroll</div>
+                  <div className="font-mono-num text-[10px] font-extrabold text-amber-300">
+                    ×{player.bloodScrolls} шт.
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 rounded-lg border border-rose-500/30 bg-[#181118] px-2 py-1">
+                <SpecialInventoryIcon kind="blood_fang" className="h-5 w-5 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[10px] font-bold text-rose-200">Blood Fang</div>
+                  <div className="font-mono-num text-[10px] font-extrabold text-amber-300">
+                    ×{player.bloodFangs} шт.
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 rounded-lg border border-amber-500/35 bg-[#1b141a] px-2 py-1">
+                <SpecialInventoryIcon kind="blood_castle_ticket" className="h-5 w-5 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[10px] font-bold text-amber-200">Билет BC</div>
+                  <div className="font-mono-num text-[10px] font-extrabold text-emerald-300">
+                    ×{player.bloodCastleTickets} шт.
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* SELECTED / HOVERED ITEM QUICK ACTIONS BAR */}
           <div className="rounded-xl border border-amber-500/30 bg-[#161221] p-3">
             {inspectedEquipment ? (
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span
-                      className={`font-display text-sm font-bold ${getRarityTextClass(
-                        inspectedEquipment.item.rarity
-                      )}`}
-                    >
-                      {inspectedEquipment.item.name} +{inspectedEquipment.item.level}
-                    </span>
-                    <span className="rounded-md bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-[#d6cec2]">
-                      {SLOT_LABELS[inspectedEquipment.slot]} ·{' '}
-                      {inspectedEquipment.isEquipped ? 'Надето на герое' : 'В сетке сумки'}
-                    </span>
+                <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                  <div
+                    className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border p-1.5 ${getRarityBorderClass(
+                      inspectedEquipment.item.rarity
+                    )}`}
+                  >
+                    <EquipmentItemIcon
+                      slot={inspectedEquipment.slot}
+                      rarity={inspectedEquipment.item.rarity}
+                      item={inspectedEquipment.item}
+                      fallbackClassId={player.classId}
+                      className="h-8 w-8"
+                    />
                   </div>
-                  <div className="mt-1 font-mono-num text-xs text-[#dfd7c8]">
-                    {inspectedEquipment.item.baseAttack > 0 &&
-                      `Атака: ${calculateItemEffectiveAttack(inspectedEquipment.item)} · `}
-                    {inspectedEquipment.item.baseDefense > 0 &&
-                      `Защита: ${calculateItemEffectiveDefense(inspectedEquipment.item)} · `}
-                    Крит: +{inspectedEquipment.item.critChanceBonus}%
-                    {inspectedEquipment.item.lifeOption > 0 &&
-                      ` · Опция Life: +${inspectedEquipment.item.lifeOption}`}
-                  </div>
-                  {inspectedEquipment.item.excellentOption && (
-                    <div className="mt-0.5 text-[11px] font-medium text-emerald-300">
-                      ✦ {inspectedEquipment.item.excellentOption}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`font-display text-sm font-bold ${getRarityTextClass(
+                          inspectedEquipment.item.rarity
+                        )}`}
+                      >
+                        {inspectedEquipment.item.name} +{inspectedEquipment.item.level}
+                      </span>
+                      <span className="rounded-md bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-[#d6cec2]">
+                        {SLOT_LABELS[inspectedEquipment.slot]} ·{' '}
+                        {inspectedEquipment.isEquipped ? 'Надето на герое' : 'В сетке сумки'}
+                      </span>
                     </div>
-                  )}
+                    <div className="mt-1 font-mono-num text-xs text-[#dfd7c8]">
+                      {inspectedEquipment.item.baseAttack > 0 &&
+                        `Атака: ${calculateItemEffectiveAttack(inspectedEquipment.item)} · `}
+                      {inspectedEquipment.item.baseDefense > 0 &&
+                        `Защита: ${calculateItemEffectiveDefense(inspectedEquipment.item)} · `}
+                      Крит: +{inspectedEquipment.item.critChanceBonus}%
+                      {inspectedEquipment.item.lifeOption > 0 &&
+                        ` · Опция Life: +${inspectedEquipment.item.lifeOption}`}
+                    </div>
+                    {inspectedEquipment.item.excellentOption && (
+                      <div className="mt-0.5 text-[11px] font-medium text-emerald-300">
+                        ✦ {inspectedEquipment.item.excellentOption}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -1443,28 +1092,36 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
                     </>
                   )}
 
-                  <button
-                    type="button"
-                    disabled={player.jewels.bless <= 0}
-                    onClick={() =>
-                      handleApplyJewelToItem(inspectedEquipment.item.id, 'bless')
-                    }
-                    title="Заточить камнем Jewel of Bless (+1 уровень)"
-                    className="gothic-button min-h-[38px] rounded-xl px-2.5 py-1.5 text-[11px] font-semibold text-purple-200 disabled:opacity-35 cursor-pointer"
-                  >
-                    +Bless ({player.jewels.bless})
-                  </button>
-                  <button
-                    type="button"
-                    disabled={player.jewels.life <= 0}
-                    onClick={() =>
-                      handleApplyJewelToItem(inspectedEquipment.item.id, 'life')
-                    }
-                    title="Усилить камнем Jewel of Life (+4 опция)"
-                    className="gothic-button min-h-[38px] rounded-xl px-2.5 py-1.5 text-[11px] font-semibold text-amber-200 disabled:opacity-35 cursor-pointer"
-                  >
-                    +Life ({player.jewels.life})
-                  </button>
+                  {inspectedEquipment.slot === 'wings' ? (
+                    <span className="rounded-xl border border-purple-400/35 bg-purple-950/40 px-2.5 py-1.5 font-mono-num text-[10px] font-semibold text-purple-200">
+                      ⚙️ Заточка: Машина Хаоса [K] (до +9: 1B+1S+1C · +10..+15: 3B+3S+3C)
+                    </span>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        disabled={player.jewels.bless <= 0}
+                        onClick={() =>
+                          handleApplyJewelToItem(inspectedEquipment.item.id, 'bless')
+                        }
+                        title="Заточить камнем Jewel of Bless (+1 уровень)"
+                        className="gothic-button min-h-[38px] rounded-xl px-2.5 py-1.5 text-[11px] font-semibold text-purple-200 disabled:opacity-35 cursor-pointer"
+                      >
+                        +Bless ({player.jewels.bless})
+                      </button>
+                      <button
+                        type="button"
+                        disabled={player.jewels.life <= 0}
+                        onClick={() =>
+                          handleApplyJewelToItem(inspectedEquipment.item.id, 'life')
+                        }
+                        title="Усилить камнем Jewel of Life (+4 опция)"
+                        className="gothic-button min-h-[38px] rounded-xl px-2.5 py-1.5 text-[11px] font-semibold text-amber-200 disabled:opacity-35 cursor-pointer"
+                      >
+                        +Life ({player.jewels.life})
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             ) : (

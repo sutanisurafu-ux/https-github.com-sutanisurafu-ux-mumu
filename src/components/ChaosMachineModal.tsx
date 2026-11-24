@@ -2,13 +2,16 @@ import React, { useState } from 'react';
 import {
   calculateItemEffectiveAttack,
   calculateItemEffectiveDefense,
+  getWingChaosUpgradeCost,
 } from '../game/rules';
 import { EquipmentItem, ItemSlot, PlayerProgressState } from '../game/types';
+import { EquipmentItemIcon } from './ItemIcon';
 
 interface ChaosMachineModalProps {
   player: PlayerProgressState;
   onClose: () => void;
   onUpgradeWithJewel: (itemId: string, jewelType: 'bless' | 'soul' | 'life') => string;
+  onUpgradeWings: (itemId?: string) => string;
   onCraftWings: () => string;
   onCraftBloodCastleTicket: () => string;
   onEnterBloodCastle: () => string;
@@ -18,21 +21,30 @@ export const ChaosMachineModal: React.FC<ChaosMachineModalProps> = ({
   player,
   onClose,
   onUpgradeWithJewel,
+  onUpgradeWings,
   onCraftWings,
   onCraftBloodCastleTicket,
   onEnterBloodCastle,
 }) => {
   const [craftMessage, setCraftMessage] = useState<string>(
-    'Варите Билет в Blood Castle (Скрол + Фанг + Чаос, шанс 80%), синтезируйте Крылья или затачивайте экипировку камнями Bless, Soul и Life.'
+    'Крылья затачиваются ТОЛЬКО в Машине Хаоса (до +9: 1 Bless + 1 Soul + 1 Chaos; на +10 и выше: 3 Bless + 3 Soul + 3 Chaos). Обычная экипировка точится камнями Bless, Soul и Life.'
   );
 
-  const equippedList: { slot: ItemSlot; item: EquipmentItem }[] = [];
+  const equippedList: { slot: ItemSlot; item: EquipmentItem; isEquipped: boolean }[] = [];
   (['weapon', 'armor', 'helm', 'wings', 'ring', 'pendant'] as ItemSlot[]).forEach((slot) => {
     const it = player.equipped[slot];
-    if (it) equippedList.push({ slot, item: it });
+    if (it) equippedList.push({ slot, item: it, isEquipped: true });
   });
+  // Also include any wings sitting in the inventory so the player can upgrade them at the Chaos Machine
+  for (const invItem of player.inventory) {
+    if (invItem.slot === 'wings') {
+      equippedList.push({ slot: 'wings', item: invItem, isEquipped: false });
+    }
+  }
 
-  const hasWings = player.equipped.wings !== null;
+  const equippedWings = player.equipped.wings;
+  const hasWings = equippedWings !== null;
+  const hasTier3Wings = equippedWings?.rarity === 'ancient';
   const canCraftBcTicket =
     player.bloodScrolls >= 1 && player.bloodFangs >= 1 && player.jewels.chaos >= 1;
 
@@ -162,86 +174,190 @@ export const ChaosMachineModal: React.FC<ChaosMachineModalProps> = ({
                 </h3>
                 <p className="mt-1 text-xs text-[#bfb6a6]">
                   {hasWings
-                    ? 'Превращает ваши текущие крылья в Древние Крылья 3-го уровня (+42 АТК, +36 ЗАЩ, +32 Скорость, золотая молниеносная аура).'
+                    ? 'Превращает ваши текущие крылья 2-го уровня в Древние Крылья 3-го уровня с сохранением текущей заточки. Заточка крыльев (+1..+15) выполняется ниже за набор камней Bless + Soul + Chaos.'
                     : 'Дарует герою светящиеся крылья за спиной (+26 АТК, +22 ЗАЩ, +24 Скорость, +95 ОЗ) и частицу Древнего Сета.'}
                 </p>
                 <p className="mt-1.5 text-xs font-mono-num text-amber-300">
-                  Требуется: 1 Jewel of Chaos (падает с Боссов с шансом 20%, с мобов в 150+ локациях и за квест Blood Castle) · 800 Zen · Шанс: 100%
+                  Требуется: 1 Jewel of Chaos · 800 Zen · Шанс: 100%
                 </p>
               </div>
               <button
                 type="button"
+                disabled={hasTier3Wings}
                 onClick={() => {
                   const msg = onCraftWings();
                   setCraftMessage(msg);
                 }}
-                className="min-h-[48px] rounded-xl bg-amber-500 px-5 py-2.5 font-display text-xs font-bold text-[#09080c] shadow-[0_4px_16px_rgba(245,158,11,0.35)] hover:bg-amber-400 cursor-pointer whitespace-nowrap shrink-0"
+                className={`min-h-[48px] rounded-xl px-5 py-2.5 font-display text-xs font-bold whitespace-nowrap shrink-0 ${
+                  hasTier3Wings
+                    ? 'bg-purple-950/60 text-purple-300/70 border border-purple-400/30 cursor-not-allowed'
+                    : 'bg-amber-500 text-[#09080c] shadow-[0_4px_16px_rgba(245,158,11,0.35)] hover:bg-amber-400 cursor-pointer'
+                }`}
               >
-                {hasWings ? 'Сковать Крылья 3-го Ур.' : 'Сковать Крылья Хаоса'}
+                {hasTier3Wings
+                  ? 'Крылья 3-го Ур. выкованы'
+                  : hasWings
+                    ? 'Сковать Крылья 3-го Ур.'
+                    : 'Сковать Крылья Хаоса'}
               </button>
             </div>
           </div>
 
-          {/* Section 2: Jewel of Bless, Soul & Life Item Upgrading */}
+          {/* Section 2: Equipment & Wing Upgrading */}
           <div>
             <h3 className="mb-3 text-xs font-semibold text-amber-300">
-              Заточка надетой экипировки (+1..+15) и опции Jewel of Life (+4..+28)
+              Заточка экипировки (+1..+15) и Крыльев (до +9: 1B+1S+1C · на +10..+15: 3B+3S+3C)
             </h3>
             <div className="flex flex-col gap-3">
-              {equippedList.map(({ item }) => (
-                <div
-                  key={item.id}
-                  className="flex flex-col justify-between gap-3 rounded-xl bg-[#14111c] p-3.5 border border-white/10 sm:flex-row sm:items-center"
-                >
-                  <div>
-                    <div className="text-sm font-bold text-amber-300">
-                      {item.name} +{item.level}{' '}
-                      {item.lifeOption > 0 && (
-                        <span className="text-emerald-300">(Life +{item.lifeOption})</span>
+              {equippedList.map(({ item, isEquipped }) => {
+                const isWings = item.slot === 'wings';
+                const wingCost = isWings ? getWingChaosUpgradeCost(item.level) : null;
+                const canAffordWingUpgrade =
+                  wingCost !== null &&
+                  !wingCost.isMaxLevel &&
+                  player.jewels.bless >= wingCost.bless &&
+                  player.jewels.soul >= wingCost.soul &&
+                  player.jewels.chaos >= wingCost.chaos;
+
+                return (
+                  <div
+                    key={item.id}
+                    className={`flex flex-col justify-between gap-3 rounded-xl p-3.5 border sm:flex-row sm:items-center ${
+                      isWings
+                        ? 'bg-[#191326] border-purple-400/35 shadow-[0_0_16px_rgba(192,132,252,0.12)]'
+                        : 'bg-[#14111c] border-white/10'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-500/35 bg-[#1b1628] p-1.5">
+                        <EquipmentItemIcon
+                          slot={item.slot}
+                          rarity={item.rarity}
+                          item={item}
+                          fallbackClassId={player.classId}
+                          className="h-7 w-7"
+                        />
+                      </div>
+                      <div>
+                        <div className="flex flex-wrap items-center gap-1.5 text-sm font-bold text-amber-300">
+                          <span>
+                            {item.name} +{item.level}
+                          </span>
+                          {!isEquipped && (
+                            <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#cfc6b8]">
+                              В инвентаре
+                            </span>
+                          )}
+                          {item.lifeOption > 0 && (
+                            <span className="text-emerald-300">(Life +{item.lifeOption})</span>
+                          )}
+                        </div>
+                        <div className="mt-0.5 text-xs text-[#cfc6b8] font-mono-num">
+                          {item.baseAttack > 0 && `Эффективная АТК: ${calculateItemEffectiveAttack(item)} `}
+                          {item.baseDefense > 0 && `Эффективная ЗАЩ: ${calculateItemEffectiveDefense(item)}`}
+                          {isWings && ` · Скорость: +${item.level}% к макс.`}
+                        </div>
+                        {isWings && wingCost && !wingCost.isMaxLevel && (
+                          <div className="mt-1 flex flex-wrap items-center gap-2 font-mono-num text-[11px]">
+                            <span className="text-purple-200 font-semibold">
+                              Заточка на +{wingCost.nextLevel}:
+                            </span>
+                            <span
+                              className={
+                                player.jewels.bless >= wingCost.bless
+                                  ? 'text-emerald-300 font-bold'
+                                  : 'text-rose-300'
+                              }
+                            >
+                              Bless {player.jewels.bless}/{wingCost.bless}
+                            </span>
+                            <span className="text-white/30">+</span>
+                            <span
+                              className={
+                                player.jewels.soul >= wingCost.soul
+                                  ? 'text-emerald-300 font-bold'
+                                  : 'text-rose-300'
+                              }
+                            >
+                              Soul {player.jewels.soul}/{wingCost.soul}
+                            </span>
+                            <span className="text-white/30">+</span>
+                            <span
+                              className={
+                                player.jewels.chaos >= wingCost.chaos
+                                  ? 'text-emerald-300 font-bold'
+                                  : 'text-rose-300'
+                              }
+                            >
+                              Chaos {player.jewels.chaos}/{wingCost.chaos}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {isWings && wingCost ? (
+                        <button
+                          type="button"
+                          disabled={wingCost.isMaxLevel}
+                          data-testid={`chaos-upgrade-wings-${item.id}`}
+                          onClick={() => {
+                            const msg = onUpgradeWings(item.id);
+                            setCraftMessage(msg);
+                          }}
+                          className={`min-h-[44px] rounded-xl px-3.5 py-2 font-display text-xs font-bold whitespace-nowrap cursor-pointer ${
+                            wingCost.isMaxLevel
+                              ? 'bg-white/10 text-white/40 cursor-not-allowed'
+                              : canAffordWingUpgrade
+                                ? 'bg-purple-500 text-white shadow-[0_4px_14px_rgba(168,85,247,0.45)] hover:bg-purple-400'
+                                : 'gothic-button text-purple-200'
+                          }`}
+                        >
+                          {wingCost.isMaxLevel
+                            ? 'Макс. +15'
+                            : `Улучшить на +${wingCost.nextLevel} (${wingCost.bless}B + ${wingCost.soul}S + ${wingCost.chaos}C)`}
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const msg = onUpgradeWithJewel(item.id, 'bless');
+                              setCraftMessage(msg);
+                            }}
+                            className="gothic-button min-h-[44px] rounded-xl px-3 py-2 text-xs font-semibold text-amber-200 cursor-pointer whitespace-nowrap"
+                          >
+                            +Bless ({player.jewels.bless})
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const msg = onUpgradeWithJewel(item.id, 'soul');
+                              setCraftMessage(msg);
+                            }}
+                            className="gothic-button min-h-[44px] rounded-xl px-3 py-2 text-xs font-semibold text-purple-200 cursor-pointer whitespace-nowrap"
+                          >
+                            +Soul ({player.jewels.soul})
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const msg = onUpgradeWithJewel(item.id, 'life');
+                              setCraftMessage(msg);
+                            }}
+                            className="gothic-button min-h-[44px] rounded-xl px-3 py-2 text-xs font-semibold text-emerald-300 cursor-pointer whitespace-nowrap"
+                          >
+                            +Life ({player.jewels.life})
+                          </button>
+                        </>
                       )}
                     </div>
-                    <div className="mt-0.5 text-xs text-[#cfc6b8] font-mono-num">
-                      {item.baseAttack > 0 && `Эффективная АТК: ${calculateItemEffectiveAttack(item)} `}
-                      {item.baseDefense > 0 && `Эффективная ЗАЩ: ${calculateItemEffectiveDefense(item)}`}
-                    </div>
                   </div>
-
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const msg = onUpgradeWithJewel(item.id, 'bless');
-                        setCraftMessage(msg);
-                      }}
-                      className="gothic-button min-h-[44px] rounded-xl px-3 py-2 text-xs font-semibold text-amber-200 cursor-pointer whitespace-nowrap"
-                    >
-                      +Bless ({player.jewels.bless})
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const msg = onUpgradeWithJewel(item.id, 'soul');
-                        setCraftMessage(msg);
-                      }}
-                      className="gothic-button min-h-[44px] rounded-xl px-3 py-2 text-xs font-semibold text-purple-200 cursor-pointer whitespace-nowrap"
-                    >
-                      +Soul ({player.jewels.soul})
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const msg = onUpgradeWithJewel(item.id, 'life');
-                        setCraftMessage(msg);
-                      }}
-                      className="gothic-button min-h-[44px] rounded-xl px-3 py-2 text-xs font-semibold text-emerald-300 cursor-pointer whitespace-nowrap"
-                    >
-                      +Life ({player.jewels.life})
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -249,3 +365,4 @@ export const ChaosMachineModal: React.FC<ChaosMachineModalProps> = ({
     </div>
   );
 };
+

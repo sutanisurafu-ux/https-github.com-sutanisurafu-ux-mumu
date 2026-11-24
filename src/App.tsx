@@ -53,6 +53,7 @@ import {
   resolvePlayerDeathInZone,
   unequipItemToInventory,
   upgradeItemWithJewel,
+  upgradeWingsInChaosMachine,
 } from './game/rules';
 import { soundEngine } from './game/sound';
 import {
@@ -2019,6 +2020,13 @@ export default function App() {
     return result.message;
   };
 
+  const handleUpgradeWings = (itemId?: string): string => {
+    const result = upgradeWingsInChaosMachine(player, itemId);
+    setPlayer(result.nextState);
+    soundEngine.playChaosForge(result.success);
+    return result.message;
+  };
+
   const handleCraftWings = (): string => {
     const result = craftChaosWings(player);
     setPlayer(result.nextState);
@@ -2430,6 +2438,7 @@ export default function App() {
           player={player}
           onClose={() => setActiveDrawer('none')}
           onUpgradeWithJewel={handleUpgradeWithJewel}
+          onUpgradeWings={handleUpgradeWings}
           onCraftWings={handleCraftWings}
           onCraftBloodCastleTicket={handleCraftBloodCastleTicket}
           onEnterBloodCastle={handleEnterBloodCastle}

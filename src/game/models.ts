@@ -1164,24 +1164,33 @@ function findCatalogArmorPreset(
   itemName: string,
   def: number
 ): ArmorCatalogVisualPreset {
-  const table =
+  const primaryTable =
     classId === 'dark_knight'
       ? DK_ARMOR_PRESETS
       : classId === 'dark_wizard'
         ? DW_ARMOR_PRESETS
         : ELF_ARMOR_PRESETS;
   const cleaned = itemName.replace(/^(Exc\.|Anc\.)\s+/i, '').trim();
-  for (const entry of table) {
+  for (const entry of primaryTable) {
     if (entry.match.test(cleaned)) {
       return entry.preset;
     }
   }
+  // Cross-class fallback so items belonging to another class still resolve to their exact preset
+  for (const otherTable of [DK_ARMOR_PRESETS, DW_ARMOR_PRESETS, ELF_ARMOR_PRESETS]) {
+    if (otherTable === primaryTable) continue;
+    for (const entry of otherTable) {
+      if (entry.match.test(cleaned)) {
+        return entry.preset;
+      }
+    }
+  }
   // Fallback by defense tier if an unknown custom name is passed
-  if (def >= 115) return table[table.length - 1].preset;
-  if (def >= 72) return table[Math.min(table.length - 1, 9)].preset;
-  if (def >= 36) return table[Math.min(table.length - 1, 5)].preset;
-  if (def >= 20) return table[Math.min(table.length - 1, 3)].preset;
-  return table[0].preset;
+  if (def >= 115) return primaryTable[primaryTable.length - 1].preset;
+  if (def >= 72) return primaryTable[Math.min(primaryTable.length - 1, 9)].preset;
+  if (def >= 36) return primaryTable[Math.min(primaryTable.length - 1, 5)].preset;
+  if (def >= 20) return primaryTable[Math.min(primaryTable.length - 1, 3)].preset;
+  return primaryTable[0].preset;
 }
 
 /**
@@ -1911,6 +1920,20 @@ export function resolveWeaponVisualStyle(
     if (entry.match.test(cleanedName)) {
       chosen = entry.preset;
       break;
+    }
+  }
+
+  // Cross-class fallback so a weapon from another class in inventory/trade resolves to its exact archetype
+  if (!chosen) {
+    for (const otherTable of [DK_WEAPON_PRESETS, DW_WEAPON_PRESETS, ELF_WEAPON_PRESETS]) {
+      if (otherTable === table) continue;
+      for (const entry of otherTable) {
+        if (entry.match.test(cleanedName)) {
+          chosen = entry.preset;
+          break;
+        }
+      }
+      if (chosen) break;
     }
   }
 
@@ -5189,3 +5212,323 @@ export function drawNpcModel(
 
   ctx.restore();
 }
+
+export type WingIconArchetype =
+  | 'wings_satan_ii'
+  | 'wings_heaven_ii'
+  | 'wings_elf_ii'
+  | 'wings_storm_iii'
+  | 'wings_eternal_iii'
+  | 'wings_illusion_iii';
+
+export type AccessoryIconArchetype =
+  | 'ring_battle_fury'
+  | 'ring_ice_crystal'
+  | 'ring_emerald_poison'
+  | 'ring_ancient_signet'
+  | 'pendant_thunder_fang'
+  | 'pendant_fire_ruby'
+  | 'pendant_frost_prism'
+  | 'pendant_ancient_relic';
+
+export type InventoryItemIconId =
+  | WeaponVisualArchetype
+  | ArmorChestMotif
+  | ArmorHelmMotif
+  | WingIconArchetype
+  | AccessoryIconArchetype;
+
+export interface InventoryItemIconDescriptor {
+  iconId: InventoryItemIconId;
+  slot: EquipmentItem['slot'];
+  classId: CharacterClassId;
+  shortLabel: string;
+  basePrimaryColor: string;
+  primaryColor: string;
+  secondaryColor: string;
+  accentColor: string;
+  trimColor: string;
+  gemColor: string;
+  hasExcellentGreenGlow: boolean;
+  excellentGlowColor: string;
+  hasAncientPurpleGlow: boolean;
+  ancientGlowColor: string;
+  upgradeEffect: ItemUpgradeColorEffect;
+}
+
+/**
+ * Accurately infers the character class an equipment item belongs to using `item.classRestriction`
+ * first, then checking exact Elf / Wizard / Knight catalog presets and wing names.
+ */
+export function inferEquipmentClassId(
+  item: EquipmentItem | null | undefined,
+  fallbackClassId: CharacterClassId = 'dark_knight'
+): CharacterClassId {
+  if (!item) return fallbackClassId;
+
+  const cleaned = item.name.replace(/^(Exc\.|Anc\.|Экселлент|Древний)\s+/i, '').trim();
+
+  if (item.slot === 'wings') {
+    if (/Небес|Heaven|Вечности|Eternal/i.test(cleaned)) return 'dark_wizard';
+    if (/Эльфа|Elf|Иллюзии|Illusion/i.test(cleaned)) return 'fairy_elf';
+    if (/Сатаны|Satan|Шторма|Storm/i.test(cleaned)) return 'dark_knight';
+    return item.classRestriction ?? fallbackClassId;
+  }
+
+  if (item.slot === 'weapon') {
+    if (/Лук|Арбалет/i.test(cleaned)) return 'fairy_elf';
+    if (/Посох|Жезл|Скипетр/i.test(cleaned)) return 'dark_wizard';
+    if (/Меч|Клинок|Трезубец|Коса/i.test(cleaned)) return 'dark_knight';
+    if (item.classRestriction) return item.classRestriction;
+  } else if (item.slot === 'armor' || item.slot === 'helm') {
+    if (
+      /Туника|Обруч Рощи|Диадема Стража Нории|Доспех Стража Нории|Луны Эльбеланда|Тиара Эльбеланда|Снегов Девиаса|Венец Льдов Девиаса|Красного Духа|Сирены|Валькирии|Оазиса Таркана|Песков Таркана|Крылатый Доспех Икаруса|Облаков Икаруса|Крайвульфа|Алтаря Волка|Никси|Сильфиды/i.test(
+        cleaned
+      )
+    ) {
+      return 'fairy_elf';
+    }
+    if (
+      /Холщовая|Повязка Ученика|Анубиса|Мудреца Нории|Венец Нории|Туманов Эльбеланда|Диадема Эльбеланда|Вьюги Девиаса|Стужи Девиаса|Легендарного Духа|Бездны Атланса|Тиара Атланса|Затмения|Бури Таркана|Оракула Таркана|Звёздного Икаруса|Диадема Икаруса|Реликвий Кантуру|Кошмара Кантуру|Пентаграмм Ахерона|Корона Ахерона|Вечности|Кундуна/i.test(
+        cleaned
+      )
+    ) {
+      return 'dark_wizard';
+    }
+    if (
+      /Кожаный Доспех Лоренсии|Кожаный Шлем Лоренсии|Чёрного Дракона|Броня Стража Нории|Шлем Стража Нории|Рыцаря Эльбеланда|Корона Эльбеланда|Северного Девиаса|Шлем Льдов Девиаса|Чёрного Феникса|Чешуйчатый Доспех Атланса|Шлем Глубин Атланса|Повелителя Башни|Рогатый Шлем Балрога|Пустынного Титана|Песчаной Бури|Небесного Дракона|Небесного Феникса|Императора Кантуру|Титана Кантуру|Кираса Вечного Льда|Корона Фереи|Великого Титана/i.test(
+        cleaned
+      )
+    ) {
+      return 'dark_knight';
+    }
+    if (item.classRestriction) return item.classRestriction;
+  }
+
+  return item.classRestriction ?? fallbackClassId;
+}
+
+export function formatShortInventoryItemLabel(name: string): string {
+  const cleaned = name
+    .replace(/^(Exc\.|Anc\.|Экселлент|Древний|Древняя|Древнее)\s+/i, '')
+    .replace(/\s*\([^)]*\)/g, '')
+    .trim();
+  const words = cleaned.split(/\s+/);
+  if (words.length <= 3) return cleaned;
+  return `${words[0]} ${words[words.length - 1]}`;
+}
+
+/**
+ * Resolves any equipment item in the inventory, paperdoll, shop, trade, or chaos machine into
+ * a deterministic icon descriptor with a unique `iconId` for every differently named item,
+ * complete with upgrade-level color effects (+1..+6 blue-darkening, +6..+9 bright primary glow,
+ * +10..+15 subtle white sheen) and Exe green / Anc purple luminescence.
+ */
+export function resolveInventoryItemIconDescriptor(
+  item: EquipmentItem,
+  fallbackClassId: CharacterClassId = 'dark_knight'
+): InventoryItemIconDescriptor {
+  const classId = inferEquipmentClassId(item, fallbackClassId);
+  const shortLabel = formatShortInventoryItemLabel(item.name);
+  const hasExcellentGreenGlow = item.rarity === 'excellent';
+  const hasAncientPurpleGlow = item.rarity === 'ancient';
+
+  if (item.slot === 'weapon') {
+    const w = resolveWeaponVisualStyle(classId, item);
+    return {
+      iconId: w.archetype,
+      slot: 'weapon',
+      classId,
+      shortLabel,
+      basePrimaryColor: w.baseBladePrimary,
+      primaryColor: w.bladePrimary,
+      secondaryColor: w.bladeSecondary,
+      accentColor: w.guardColor,
+      trimColor: w.guardColor,
+      gemColor: w.gemColor,
+      hasExcellentGreenGlow,
+      excellentGlowColor: '#34d399',
+      hasAncientPurpleGlow,
+      ancientGlowColor: '#c084fc',
+      upgradeEffect: w.upgradeEffect,
+    };
+  }
+
+  if (item.slot === 'armor') {
+    const a = resolveArmorSetVisualStyle(classId, item, null);
+    return {
+      iconId: a.chestMotif,
+      slot: 'armor',
+      classId,
+      shortLabel,
+      basePrimaryColor: a.basePrimaryColor,
+      primaryColor: a.primaryColor,
+      secondaryColor: a.secondaryColor,
+      accentColor: a.accentColor,
+      trimColor: a.trimColor,
+      gemColor: a.gemColor,
+      hasExcellentGreenGlow,
+      excellentGlowColor: '#34d399',
+      hasAncientPurpleGlow,
+      ancientGlowColor: '#c084fc',
+      upgradeEffect: a.armorUpgradeEffect,
+    };
+  }
+
+  if (item.slot === 'helm') {
+    const h = resolveArmorSetVisualStyle(classId, null, item);
+    return {
+      iconId: h.helmMotif,
+      slot: 'helm',
+      classId,
+      shortLabel,
+      basePrimaryColor: h.baseHelmPrimaryColor,
+      primaryColor: h.helmPrimaryColor,
+      secondaryColor: h.helmSecondaryColor,
+      accentColor: h.accentColor,
+      trimColor: h.helmTrimColor,
+      gemColor: h.helmGemColor,
+      hasExcellentGreenGlow,
+      excellentGlowColor: '#34d399',
+      hasAncientPurpleGlow,
+      ancientGlowColor: '#c084fc',
+      upgradeEffect: h.helmUpgradeEffect,
+    };
+  }
+
+  if (item.slot === 'wings') {
+    const isExplicitTier2 = /\bII\b|Сатаны|Небес|Эльфа/i.test(item.name);
+    const isTier3 =
+      /\bIII\b|Шторма|Вечности|Иллюзии/i.test(item.name) || (!isExplicitTier2 && item.rarity === 'ancient');
+    let iconId: WingIconArchetype = 'wings_satan_ii';
+    let basePrimary = '#dc2626';
+    let baseSecondary = '#450a0a';
+    let accent = '#fbbf24';
+    let trim = '#fde047';
+    let gem = '#fef08a';
+
+    if (classId === 'dark_wizard') {
+      iconId = isTier3 ? 'wings_eternal_iii' : 'wings_heaven_ii';
+      basePrimary = isTier3 ? '#a855f7' : '#38bdf8';
+      baseSecondary = isTier3 ? '#1e1b4b' : '#0c4a6e';
+      accent = isTier3 ? '#e879f9' : '#e0f2fe';
+      trim = '#fde047';
+      gem = isTier3 ? '#38bdf8' : '#fef08a';
+    } else if (classId === 'fairy_elf') {
+      iconId = isTier3 ? 'wings_illusion_iii' : 'wings_elf_ii';
+      basePrimary = isTier3 ? '#06b6d4' : '#10b981';
+      baseSecondary = isTier3 ? '#164e63' : '#064e3b';
+      accent = isTier3 ? '#f472b6' : '#a7f3d0';
+      trim = '#fef08a';
+      gem = isTier3 ? '#fde047' : '#34d399';
+    } else {
+      iconId = isTier3 ? 'wings_storm_iii' : 'wings_satan_ii';
+      basePrimary = isTier3 ? '#ef4444' : '#991b1b';
+      baseSecondary = '#2a0609';
+      accent = isTier3 ? '#fde047' : '#f87171';
+      trim = '#fbbf24';
+      gem = '#fef08a';
+    }
+
+    const upgradeEffect = resolveItemUpgradeColorEffect(item.level ?? 0, basePrimary, baseSecondary);
+    return {
+      iconId,
+      slot: 'wings',
+      classId,
+      shortLabel,
+      basePrimaryColor: basePrimary,
+      primaryColor: upgradeEffect.tintedPrimaryColor,
+      secondaryColor: upgradeEffect.tintedSecondaryColor,
+      accentColor: accent,
+      trimColor: trim,
+      gemColor: gem,
+      hasExcellentGreenGlow,
+      excellentGlowColor: '#34d399',
+      hasAncientPurpleGlow,
+      ancientGlowColor: '#c084fc',
+      upgradeEffect,
+    };
+  }
+
+  if (item.slot === 'ring') {
+    let iconId: AccessoryIconArchetype = 'ring_battle_fury';
+    let basePrimary = '#f59e0b';
+    let baseSecondary = '#78350f';
+    let gem = '#ef4444';
+    if (item.rarity === 'ancient') {
+      iconId = 'ring_ancient_signet';
+      basePrimary = '#c084fc';
+      baseSecondary = '#3b0764';
+      gem = '#38bdf8';
+    } else if (/Льда|Стужи|Девиаса/i.test(item.name)) {
+      iconId = 'ring_ice_crystal';
+      basePrimary = '#38bdf8';
+      baseSecondary = '#0c4a6e';
+      gem = '#e0f2fe';
+    } else if (item.rarity === 'excellent' || /Яда|Нории/i.test(item.name)) {
+      iconId = 'ring_emerald_poison';
+      basePrimary = '#34d399';
+      baseSecondary = '#064e3b';
+      gem = '#fde047';
+    }
+    const upgradeEffect = resolveItemUpgradeColorEffect(item.level ?? 0, basePrimary, baseSecondary);
+    return {
+      iconId,
+      slot: 'ring',
+      classId,
+      shortLabel,
+      basePrimaryColor: basePrimary,
+      primaryColor: upgradeEffect.tintedPrimaryColor,
+      secondaryColor: upgradeEffect.tintedSecondaryColor,
+      accentColor: '#fde047',
+      trimColor: '#fef08a',
+      gemColor: gem,
+      hasExcellentGreenGlow,
+      excellentGlowColor: '#34d399',
+      hasAncientPurpleGlow,
+      ancientGlowColor: '#c084fc',
+      upgradeEffect,
+    };
+  }
+
+  // Pendant
+  let iconId: AccessoryIconArchetype = 'pendant_thunder_fang';
+  let basePrimary = '#38bdf8';
+  let baseSecondary = '#1e3a8a';
+  let gem = '#fde047';
+  if (item.rarity === 'ancient') {
+    iconId = 'pendant_ancient_relic';
+    basePrimary = '#c084fc';
+    baseSecondary = '#3b0764';
+    gem = '#fef08a';
+  } else if (/Огня|Пламени|Феникса/i.test(item.name)) {
+    iconId = 'pendant_fire_ruby';
+    basePrimary = '#ef4444';
+    baseSecondary = '#7f1d1d';
+    gem = '#fbbf24';
+  } else if (/Льда|Вьюги|Кристалл/i.test(item.name)) {
+    iconId = 'pendant_frost_prism';
+    basePrimary = '#22d3ee';
+    baseSecondary = '#164e63';
+    gem = '#e0f2fe';
+  }
+  const upgradeEffect = resolveItemUpgradeColorEffect(item.level ?? 0, basePrimary, baseSecondary);
+  return {
+    iconId,
+    slot: 'pendant',
+    classId,
+    shortLabel,
+    basePrimaryColor: basePrimary,
+    primaryColor: upgradeEffect.tintedPrimaryColor,
+    secondaryColor: upgradeEffect.tintedSecondaryColor,
+    accentColor: '#d4a853',
+    trimColor: '#fde047',
+    gemColor: gem,
+    hasExcellentGreenGlow,
+    excellentGlowColor: '#34d399',
+    hasAncientPurpleGlow,
+    ancientGlowColor: '#c084fc',
+    upgradeEffect,
+  };
+}
+

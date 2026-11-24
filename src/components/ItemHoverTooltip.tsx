@@ -10,6 +10,10 @@ import {
   ItemSlot,
   SkillDefinition,
 } from '../game/types';
+import {
+  EquipmentItemIcon,
+  SpecialInventoryIcon,
+} from './ItemIcon';
 
 export type CrossModalDragPayload =
   | { source: 'inventory'; itemId: string }
@@ -130,26 +134,36 @@ export const ItemHoverTooltip: React.FC<{
     >
       {target.kind === 'equipment' && (
         <div className="flex flex-col gap-1.5">
-          <div className="border-b border-amber-500/30 pb-1.5">
-            <div
-              className={`font-display text-sm font-extrabold leading-snug ${getRarityTitleColor(
-                target.item.rarity
-              )}`}
-            >
-              {target.item.name}
-              {target.item.level > 0 ? ` +${target.item.level}` : ''}
+          <div className="flex items-center gap-2.5 border-b border-amber-500/30 pb-1.5">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-amber-500/35 bg-[#161224] p-1">
+              <EquipmentItemIcon
+                slot={target.item.slot}
+                rarity={target.item.rarity}
+                item={target.item}
+                className="h-7 w-7"
+              />
             </div>
-            <div className="mt-1 flex flex-wrap items-center gap-1.5">
-              <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-[#e6dec8]">
-                Слот: {SLOT_LABELS[target.item.slot]}
-              </span>
-              <span
-                className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${getRarityBadgeClass(
+            <div className="min-w-0 flex-1">
+              <div
+                className={`font-display text-sm font-extrabold leading-snug ${getRarityTitleColor(
                   target.item.rarity
                 )}`}
               >
-                {RARITY_LABELS[target.item.rarity]}
-              </span>
+                {target.item.name}
+                {target.item.level > 0 ? ` +${target.item.level}` : ''}
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-[#e6dec8]">
+                  Слот: {SLOT_LABELS[target.item.slot]}
+                </span>
+                <span
+                  className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${getRarityBadgeClass(
+                    target.item.rarity
+                  )}`}
+                >
+                  {RARITY_LABELS[target.item.rarity]}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -191,12 +205,24 @@ export const ItemHoverTooltip: React.FC<{
               </div>
             )}
             {target.item.slot === 'wings' && (
-              <div className="flex items-center justify-between">
-                <span className="text-[#b5ab9b]">Макс. скорость (+1%/ур.):</span>
-                <span className="font-bold text-emerald-300">
-                  +{calculateWingUpgradeBonus(target.item).speedBonusPct}% · Размах +{calculateWingUpgradeBonus(target.item).visualGrowthPct}%
-                </span>
-              </div>
+              <>
+                <div className="flex items-center justify-between">
+                  <span className="text-[#b5ab9b]">Макс. скорость (+1%/ур.):</span>
+                  <span className="font-bold text-emerald-300">
+                    +{calculateWingUpgradeBonus(target.item).speedBonusPct}% · Размах +{calculateWingUpgradeBonus(target.item).visualGrowthPct}%
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[#b5ab9b]">Заточка (Машина Хаоса):</span>
+                  <span className="font-bold text-purple-300">
+                    {target.item.level >= 15
+                      ? 'МАКС +15'
+                      : target.item.level + 1 >= 10
+                        ? '3 Bless + 3 Soul + 3 Chaos'
+                        : '1 Bless + 1 Soul + 1 Chaos'}
+                  </span>
+                </div>
+              </>
             )}
             <div className="flex items-center justify-between">
               <span className="text-[#b5ab9b]">Уровень заточки:</span>
@@ -264,20 +290,29 @@ export const ItemHoverTooltip: React.FC<{
 
       {target.kind === 'skill_book' && (
         <div className="flex flex-col gap-1.5">
-          <div className="border-b border-amber-500/30 pb-1.5">
-            <div className="flex items-center gap-1.5">
-              <span
-                className="h-2.5 w-2.5 shrink-0 rounded-full"
-                style={{ backgroundColor: target.skill.color }}
+          <div className="flex items-center gap-2.5 border-b border-amber-500/30 pb-1.5">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-500/35 bg-[#161224] p-1">
+              <SpecialInventoryIcon
+                kind="skill_book"
+                accentColor={target.skill.color}
+                className="h-6 w-6"
               />
-              <span className="font-display text-sm font-extrabold text-amber-300">
-                {target.skill.bookName}
-              </span>
             </div>
-            <div className="mt-0.5 text-[11px] font-semibold text-[#e6dec8]">
-              Навык [{target.skill.keyBinding}]: {target.skill.name}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: target.skill.color }}
+                />
+                <span className="font-display text-sm font-extrabold text-amber-300">
+                  {target.skill.bookName}
+                </span>
+              </div>
+              <div className="mt-0.5 text-[11px] font-semibold text-[#e6dec8]">
+                Навык [{target.skill.keyBinding}]: {target.skill.name}
+              </div>
+              <div className="text-[10px] text-[#b5ab9b]">{target.skill.roleClue}</div>
             </div>
-            <div className="text-[10px] text-[#b5ab9b]">{target.skill.roleClue}</div>
           </div>
 
           <div className="flex flex-col gap-1 font-mono-num text-xs text-[#e6dec8]">
@@ -350,12 +385,17 @@ export const ItemHoverTooltip: React.FC<{
 
       {target.kind === 'jewel' && (
         <div className="flex flex-col gap-1.5">
-          <div className="border-b border-amber-500/30 pb-1">
-            <div className="font-display text-sm font-extrabold text-amber-300">
-              {target.label}
+          <div className="flex items-center gap-2.5 border-b border-amber-500/30 pb-1">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-purple-400/35 bg-[#191426] p-1">
+              <SpecialInventoryIcon kind={target.jewel} className="h-6 w-6" />
             </div>
-            <div className="font-mono-num text-xs font-bold text-purple-200">
-              В стаке: ×{target.count} шт.
+            <div>
+              <div className="font-display text-sm font-extrabold text-amber-300">
+                {target.label}
+              </div>
+              <div className="font-mono-num text-xs font-bold text-purple-200">
+                В стаке: ×{target.count} шт.
+              </div>
             </div>
           </div>
           <p className="text-xs leading-relaxed text-[#e6dec8]">{target.desc}</p>
@@ -364,26 +404,40 @@ export const ItemHoverTooltip: React.FC<{
 
       {target.kind === 'potion' && (
         <div className="flex flex-col gap-1.5">
-          <div className="border-b border-amber-500/30 pb-1">
-            <div
-              className={`font-display text-sm font-extrabold ${
-                target.potionType === 'large_hp'
-                  ? 'text-amber-300'
-                  : target.potionType === 'hp'
-                    ? 'text-rose-300'
-                    : 'text-sky-300'
-              }`}
-            >
-              {target.potionType === 'large_hp'
-                ? 'Большое Зелье ОЗ (+500 HP)'
-                : target.potionType === 'hp'
-                  ? 'Эликсир Исцеления (+250 HP)'
-                  : 'Эликсир Духа (Банки Маны)'}
+          <div className="flex items-center gap-2.5 border-b border-amber-500/30 pb-1">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-500/30 bg-[#181322] p-1">
+              <SpecialInventoryIcon
+                kind={
+                  target.potionType === 'large_hp'
+                    ? 'potion_large_hp'
+                    : target.potionType === 'hp'
+                      ? 'potion_hp'
+                      : 'potion_mp'
+                }
+                className="h-6 w-6"
+              />
             </div>
-            <div className="font-mono-num text-xs font-bold text-[#e6dec8]">
-              {target.context === 'shop'
-                ? `Набор в лавке: +${target.count} шт.`
-                : `В запасе: ×${target.count} шт.`}
+            <div>
+              <div
+                className={`font-display text-sm font-extrabold ${
+                  target.potionType === 'large_hp'
+                    ? 'text-amber-300'
+                    : target.potionType === 'hp'
+                      ? 'text-rose-300'
+                      : 'text-sky-300'
+                }`}
+              >
+                {target.potionType === 'large_hp'
+                  ? 'Большое Зелье ОЗ (+500 HP)'
+                  : target.potionType === 'hp'
+                    ? 'Эликсир Исцеления (+250 HP)'
+                    : 'Эликсир Духа (Банки Маны)'}
+              </div>
+              <div className="font-mono-num text-xs font-bold text-[#e6dec8]">
+                {target.context === 'shop'
+                  ? `Набор в лавке: +${target.count} шт.`
+                  : `В запасе: ×${target.count} шт.`}
+              </div>
             </div>
           </div>
           <p className="text-xs text-[#dfd7c8]">
@@ -409,12 +463,17 @@ export const ItemHoverTooltip: React.FC<{
 
       {target.kind === 'quest_item' && (
         <div className="flex flex-col gap-1.5">
-          <div className="border-b border-amber-500/30 pb-1">
-            <div className="font-display text-sm font-extrabold text-amber-300">
-              ★ Квестовая Реликвия: {target.name}
+          <div className="flex items-center gap-2.5 border-b border-amber-500/30 pb-1">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-400/45 bg-[#1b1526] p-1">
+              <SpecialInventoryIcon kind="quest" className="h-6 w-6" />
             </div>
-            <div className="font-mono-num text-xs font-bold text-emerald-300">
-              Статус: {target.hasItem ? '1/1 (Выбита!)' : '0/1 (Не найдена)'}
+            <div>
+              <div className="font-display text-sm font-extrabold text-amber-300">
+                ★ Квестовая Реликвия: {target.name}
+              </div>
+              <div className="font-mono-num text-xs font-bold text-emerald-300">
+                Статус: {target.hasItem ? '1/1 (Выбита!)' : '0/1 (Не найдена)'}
+              </div>
             </div>
           </div>
           <p className="text-xs text-[#dfd7c8]">

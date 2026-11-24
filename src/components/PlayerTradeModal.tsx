@@ -12,6 +12,7 @@ import {
   TradeJewelOffer,
   TradeSideOffer,
 } from '../game/types';
+import { EquipmentItemIcon } from './ItemIcon';
 
 interface PlayerTradeModalProps {
   player: PlayerProgressState;
@@ -261,23 +262,32 @@ export const PlayerTradeModal: React.FC<PlayerTradeModalProps> = ({
                   partnerOffer.items.map((item) => (
                     <div
                       key={item.id}
-                      className={`flex items-center justify-between rounded-lg border px-2.5 py-1.5 ${getRarityBorderClass(
+                      className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 ${getRarityBorderClass(
                         item.rarity
                       )}`}
                     >
-                      <div className="min-w-0">
-                        <div
-                          className={`truncate text-xs font-bold ${getRarityTextClass(
-                            item.rarity
-                          )}`}
-                        >
-                          {item.name} +{item.level}
-                        </div>
-                        <div className="font-mono-num text-[10px] text-[#cfc6b8]">
-                          {SLOT_LABELS[item.slot]} ·{' '}
-                          {item.baseAttack > 0 && `АТК ${calculateItemEffectiveAttack(item)} `}
-                          {item.baseDefense > 0 && `ЗАЩ ${calculateItemEffectiveDefense(item)}`}
-                          {item.lifeOption > 0 && ` · Life +${item.lifeOption}`}
+                      <div className="flex min-w-0 items-center gap-2">
+                        <EquipmentItemIcon
+                          slot={item.slot}
+                          rarity={item.rarity}
+                          item={item}
+                          fallbackClassId={player.classId}
+                          className="h-6 w-6 shrink-0"
+                        />
+                        <div className="min-w-0">
+                          <div
+                            className={`truncate text-xs font-bold ${getRarityTextClass(
+                              item.rarity
+                            )}`}
+                          >
+                            {item.name} +{item.level}
+                          </div>
+                          <div className="font-mono-num text-[10px] text-[#cfc6b8]">
+                            {SLOT_LABELS[item.slot]} ·{' '}
+                            {item.baseAttack > 0 && `АТК ${calculateItemEffectiveAttack(item)} `}
+                            {item.baseDefense > 0 && `ЗАЩ ${calculateItemEffectiveDefense(item)}`}
+                            {item.lifeOption > 0 && ` · Life +${item.lifeOption}`}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -379,18 +389,27 @@ export const PlayerTradeModal: React.FC<PlayerTradeModalProps> = ({
                       onClick={() => handleToggleItemInOffer(item)}
                       role="button"
                       tabIndex={0}
-                      className={`flex items-center justify-between rounded-lg border px-2.5 py-1 cursor-pointer ${getRarityBorderClass(
+                      className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1 cursor-pointer ${getRarityBorderClass(
                         item.rarity
                       )}`}
                     >
-                      <span
-                        className={`truncate text-xs font-bold ${getRarityTextClass(
-                          item.rarity
-                        )}`}
-                      >
-                        {item.name} +{item.level}
-                      </span>
-                      <span className="text-[10px] font-bold text-rose-300">Убрать ×</span>
+                      <div className="flex min-w-0 items-center gap-2">
+                        <EquipmentItemIcon
+                          slot={item.slot}
+                          rarity={item.rarity}
+                          item={item}
+                          fallbackClassId={player.classId}
+                          className="h-5 w-5 shrink-0"
+                        />
+                        <span
+                          className={`truncate text-xs font-bold ${getRarityTextClass(
+                            item.rarity
+                          )}`}
+                        >
+                          {item.name} +{item.level}
+                        </span>
+                      </div>
+                      <span className="shrink-0 text-[10px] font-bold text-rose-300">Убрать ×</span>
                     </div>
                   ))
                 )}
@@ -431,14 +450,23 @@ export const PlayerTradeModal: React.FC<PlayerTradeModalProps> = ({
                         : 'hover:border-amber-300'
                     }`}
                   >
-                    <div className="flex w-full items-center justify-between gap-1">
-                      <span
-                        className={`truncate text-[11px] font-bold ${getRarityTextClass(
-                          item.rarity
-                        )}`}
-                      >
-                        {item.name}
-                      </span>
+                    <div className="flex w-full items-center justify-between gap-1.5">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <EquipmentItemIcon
+                          slot={item.slot}
+                          rarity={item.rarity}
+                          item={item}
+                          fallbackClassId={player.classId}
+                          className="h-5 w-5 shrink-0"
+                        />
+                        <span
+                          className={`truncate text-[11px] font-bold ${getRarityTextClass(
+                            item.rarity
+                          )}`}
+                        >
+                          {item.name}
+                        </span>
+                      </div>
                       <span className="rounded bg-black/70 px-1 font-mono-num text-[10px] font-extrabold text-amber-300">
                         +{item.level}
                       </span>

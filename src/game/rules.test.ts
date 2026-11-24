@@ -2590,5 +2590,368 @@ test('Grand Reset enforces progressive level requirements (300, 305, 310...), pr
   }
 });
 
+test('Every differently-named inventory item (all 39 weapons, 38 armors, 38 helms, 6 wings, rings, and pendants) resolves to its own unique iconId and reflects upgrade level + rarity glow', async () => {
+  const {
+    formatShortInventoryItemLabel,
+    inferEquipmentClassId,
+    resolveInventoryItemIconDescriptor,
+  } = await import('./models');
+  const { CLASSES } = await import('./rules');
+
+  const dkWeapons = [
+    'Короткий Меч Лоренсии',
+    'Клинок Хаоса',
+    'Клинок Изумрудной Нории',
+    'Рунный Меч Эльбеланда',
+    'Ледяной Клинок Девиаса',
+    'Клинок Разрушения',
+    'Трезубец Атланса',
+    'Коса Балрога',
+    'Клинок Заикана Таркана',
+    'Меч Огненного Феникса',
+    'Клинок Бездны Калимы',
+    'Королевский Меч Лорена',
+    'Божественный Меч Архангела',
+  ];
+  const dwWeapons = [
+    'Ученический Посох Лоренсии',
+    'Посох Легендарной Души',
+    'Посох Древней Нории',
+    'Жезл Иллюзий Эльбеланда',
+    'Ледяной Посох Девиаса',
+    'Посох Души Дракона',
+    'Посох Вод Атланса',
+    'Посох Пламени Балрога',
+    'Жезл Песков Таркана',
+    'Посох Небес Икаруса',
+    'Жезл Оракула Калимы',
+    'Скипетр Империи Кантуру',
+    'Посох Архангела Кундуна',
+  ];
+  const elfWeapons = [
+    'Короткий Лук Лоренсии',
+    'Лук Серебряного Крыла',
+    'Лук Королевы Нории',
+    'Лук Ветров Эльбеланда',
+    'Хрустальный Лук Девиаса',
+    'Арбалет Святого Духа',
+    'Коралловый Лук Атланса',
+    'Лук Хаоса Башни',
+    'Лук Золотых Песков',
+    'Крылатый Лук Икаруса',
+    'Арбалет Кошмара Кантуру',
+    'Лук Ледяного Раклиона',
+    'Божественный Арбалет Архангела',
+  ];
+
+  // 1. All 39 named weapons resolve to 39 distinct weapon iconIds even when inspected from another class's inventory
+  const weaponIcons = new Set<string>();
+  for (const name of [...dkWeapons, ...dwWeapons, ...elfWeapons]) {
+    const desc = resolveInventoryItemIconDescriptor(
+      {
+        ...CLASSES.dark_knight.startingWeapon,
+        name,
+        slot: 'weapon',
+        rarity: 'normal',
+        level: 0,
+      },
+      'dark_knight'
+    );
+    assert.equal(desc.slot, 'weapon');
+    assert.ok(!weaponIcons.has(desc.iconId), `Duplicate weapon iconId "${desc.iconId}" for "${name}"`);
+    weaponIcons.add(desc.iconId);
+  }
+  assert.equal(weaponIcons.size, 39, 'All 39 named weapons must have 39 unique inventory iconIds');
+
+  // 2. All 38 named armors resolve to 38 distinct armor iconIds (including Fairy Elf armors with "Одеяние")
+  const dkArmors = [
+    'Кожаный Доспех Лоренсии',
+    'Кираса Чёрного Дракона',
+    'Броня Стража Нории',
+    'Доспех Рыцаря Эльбеланда',
+    'Латы Северного Девиаса',
+    'Латы Чёрного Феникса',
+    'Чешуйчатый Доспех Атланса',
+    'Броня Повелителя Башни',
+    'Латы Пустынного Титана',
+    'Доспех Небесного Дракона',
+    'Броня Императора Кантуру',
+    'Кираса Вечного Льда',
+    'Доспех Великого Титана',
+  ];
+  const dwArmors = [
+    'Холщовая Мантия Лоренсии',
+    'Мантия Анубиса',
+    'Мантия Мудреца Нории',
+    'Роба Туманов Эльбеланда',
+    'Мантия Вьюги Девиаса',
+    'Мантия Легендарного Духа',
+    'Одеяние Бездны Атланса',
+    'Мантия Затмения Башни',
+    'Мантия Бури Таркана',
+    'Одеяние Звёздного Икаруса',
+    'Роба Реликвий Кантуру',
+    'Мантия Пентаграмм Ахерона',
+    'Мантия Вечности Кундуна',
+  ];
+  const elfArmors = [
+    'Лёгкая Туника Лоренсии',
+    'Доспех Стража Нории',
+    'Туника Луны Эльбеланда',
+    'Одеяние Снегов Девиаса',
+    'Одеяние Красного Духа',
+    'Латы Сирены Атланса',
+    'Доспех Валькирии Башни',
+    'Одеяние Оазиса Таркана',
+    'Крылатый Доспех Икаруса',
+    'Броня Стража Крайвульфа',
+    'Латы Хрустальной Никси',
+    'Божественные Латы Сильфиды',
+  ];
+
+  assert.equal(
+    inferEquipmentClassId({ ...CLASSES.fairy_elf.startingArmor, name: 'Одеяние Снегов Девиаса', slot: 'armor' }, 'dark_wizard'),
+    'fairy_elf'
+  );
+  assert.equal(
+    inferEquipmentClassId({ ...CLASSES.fairy_elf.startingArmor, name: 'Одеяние Красного Духа', slot: 'armor' }, 'dark_wizard'),
+    'fairy_elf'
+  );
+  assert.equal(
+    inferEquipmentClassId({ ...CLASSES.fairy_elf.startingArmor, name: 'Одеяние Оазиса Таркана', slot: 'armor' }, 'dark_wizard'),
+    'fairy_elf'
+  );
+
+  const armorIcons = new Set<string>();
+  for (const name of [...dkArmors, ...dwArmors, ...elfArmors]) {
+    const desc = resolveInventoryItemIconDescriptor(
+      {
+        ...CLASSES.dark_knight.startingArmor,
+        name,
+        slot: 'armor',
+        rarity: 'normal',
+        level: 0,
+      },
+      'dark_knight'
+    );
+    assert.equal(desc.slot, 'armor');
+    assert.ok(!armorIcons.has(desc.iconId), `Duplicate armor iconId "${desc.iconId}" for "${name}"`);
+    armorIcons.add(desc.iconId);
+  }
+  assert.equal(armorIcons.size, 38, 'All 38 named armors must have 38 unique inventory iconIds');
+
+  // 3. All 38 named helms resolve to 38 distinct helm iconIds (including Fairy Elf helms with "Венец")
+  const dkHelms = [
+    'Кожаный Шлем Лоренсии',
+    'Шлем Чёрного Дракона',
+    'Шлем Стража Нории',
+    'Корона Эльбеланда',
+    'Шлем Льдов Девиаса',
+    'Шлем Чёрного Феникса',
+    'Шлем Глубин Атланса',
+    'Рогатый Шлем Балрога',
+    'Шлем Песчаной Бури',
+    'Корона Небесного Феникса',
+    'Шлем Титана Кантуру',
+    'Корона Фереи',
+    'Корона Великого Титана',
+  ];
+  const dwHelms = [
+    'Повязка Ученика Лоренсии',
+    'Венец Анубиса',
+    'Венец Нории',
+    'Диадема Эльбеланда',
+    'Корона Стужи Девиаса',
+    'Венец Легендарного Духа',
+    'Тиара Атланса',
+    'Корона Затмения',
+    'Венец Оракула Таркана',
+    'Диадема Икаруса',
+    'Венец Кошмара Кантуру',
+    'Корона Ахерона',
+    'Корона Вечности',
+  ];
+  const elfHelms = [
+    'Обруч Рощи Лоренсии',
+    'Диадема Стража Нории',
+    'Тиара Эльбеланда',
+    'Венец Льдов Девиаса',
+    'Тиара Красного Духа',
+    'Корона Сирены Атланса',
+    'Диадема Валькирии',
+    'Тиара Песков Таркана',
+    'Венец Облаков Икаруса',
+    'Корона Алтаря Волка',
+    'Диадема Озера Никси',
+    'Корона Сильфиды',
+  ];
+
+  assert.equal(
+    inferEquipmentClassId({ ...CLASSES.fairy_elf.startingHelm, name: 'Венец Льдов Девиаса', slot: 'helm' }, 'dark_wizard'),
+    'fairy_elf'
+  );
+  assert.equal(
+    inferEquipmentClassId({ ...CLASSES.fairy_elf.startingHelm, name: 'Венец Облаков Икаруса', slot: 'helm' }, 'dark_wizard'),
+    'fairy_elf'
+  );
+
+  const helmIcons = new Set<string>();
+  for (const name of [...dkHelms, ...dwHelms, ...elfHelms]) {
+    const desc = resolveInventoryItemIconDescriptor(
+      {
+        ...CLASSES.dark_knight.startingHelm,
+        name,
+        slot: 'helm',
+        rarity: 'normal',
+        level: 0,
+      },
+      'dark_knight'
+    );
+    assert.equal(desc.slot, 'helm');
+    assert.ok(!helmIcons.has(desc.iconId), `Duplicate helm iconId "${desc.iconId}" for "${name}"`);
+    helmIcons.add(desc.iconId);
+  }
+  assert.equal(helmIcons.size, 38, 'All 38 named helms must have 38 unique inventory iconIds');
+
+  // 4. All 6 named wings resolve to 6 distinct wing iconIds and carry upgrade & rarity effects
+  const wingNames = [
+    'Крылья Сатаны II',
+    'Крылья Небес II',
+    'Крылья Эльфа II',
+    'Крылья Шторма III',
+    'Крылья Вечности III',
+    'Крылья Иллюзии III',
+  ];
+  const wingIcons = new Set<string>();
+  for (const name of wingNames) {
+    const desc = resolveInventoryItemIconDescriptor(
+      {
+        ...CLASSES.dark_knight.startingArmor,
+        name,
+        slot: 'wings',
+        rarity: 'ancient',
+        level: 12,
+      },
+      'dark_knight'
+    );
+    assert.equal(desc.slot, 'wings');
+    assert.equal(desc.hasAncientPurpleGlow, true);
+    assert.equal(desc.upgradeEffect.hasBrightPrimaryGlow, true);
+    assert.equal(desc.upgradeEffect.hasSubtleWhiteSheen, true);
+    wingIcons.add(desc.iconId);
+  }
+  assert.equal(wingIcons.size, 6, 'All 6 named wings must have 6 unique inventory iconIds');
+
+  // 5. Short label formatter strips rarity prefixes while preserving the distinctive item name
+  assert.equal(formatShortInventoryItemLabel('Экселлент Меч Черного Дракона'), 'Меч Черного Дракона');
+  assert.equal(formatShortInventoryItemLabel('Древний Корона Кундуна'), 'Корона Кундуна');
+});
+
+test('Wings can ONLY be upgraded at the Chaos Machine for 1 Bless + 1 Soul + 1 Chaos (up to +9) and 3 Bless + 3 Soul + 3 Chaos (for +10..+15), and never via single jewels or re-crafting', async () => {
+  const {
+    craftChaosWings,
+    getWingChaosUpgradeCost,
+    unequipItemToInventory,
+    upgradeItemWithJewel,
+    upgradeWingsInChaosMachine,
+  } = await import('./rules');
+
+  // 1. Verify cost table across all levels +0 -> +15
+  for (let currentLvl = 0; currentLvl <= 8; currentLvl++) {
+    const cost = getWingChaosUpgradeCost(currentLvl);
+    assert.equal(cost.nextLevel, currentLvl + 1);
+    assert.equal(cost.isHighTier, false, `Target +${cost.nextLevel} should be 1B+1S+1C tier`);
+    assert.equal(cost.bless, 1);
+    assert.equal(cost.soul, 1);
+    assert.equal(cost.chaos, 1);
+  }
+  for (let currentLvl = 9; currentLvl <= 14; currentLvl++) {
+    const cost = getWingChaosUpgradeCost(currentLvl);
+    assert.equal(cost.nextLevel, currentLvl + 1);
+    assert.equal(cost.isHighTier, true, `Target +${cost.nextLevel} (+10 and above) should be 3B+3S+3C tier`);
+    assert.equal(cost.bless, 3);
+    assert.equal(cost.soul, 3);
+    assert.equal(cost.chaos, 3);
+  }
+  assert.equal(getWingChaosUpgradeCost(15).isMaxLevel, true);
+
+  // 2. Crafting Tier 2 wings starts at +0 (not +2!)
+  const baseHero = {
+    ...createInitialPlayerState('dark_knight'),
+    zen: 50_000,
+    jewels: { bless: 50, soul: 50, life: 50, chaos: 50 },
+  };
+  const craftedT2 = craftChaosWings(baseHero);
+  assert.equal(craftedT2.success, true);
+  assert.equal(craftedT2.nextState.equipped.wings?.level, 0);
+  const wingId = craftedT2.nextState.equipped.wings!.id;
+
+  // 3. Single-jewel upgrades (Bless, Soul, Life) on wings MUST fail and leave wing level/options and jewels untouched
+  for (const jewelType of ['bless', 'soul', 'life'] as const) {
+    const res = upgradeItemWithJewel(craftedT2.nextState, wingId, jewelType, 0.01);
+    assert.equal(res.success, false, `Single jewel ${jewelType} must NOT upgrade wings`);
+    assert.equal(res.nextState.equipped.wings?.level, 0);
+    assert.deepEqual(res.nextState.jewels, craftedT2.nextState.jewels);
+  }
+
+  // Also test when wings are unequipped in the inventory bag
+  const unequipped = unequipItemToInventory(craftedT2.nextState, 'wings');
+  assert.equal(unequipped.success, true);
+  for (const jewelType of ['bless', 'soul', 'life'] as const) {
+    const resBag = upgradeItemWithJewel(unequipped.nextState, wingId, jewelType, 0.01);
+    assert.equal(resBag.success, false, `Single jewel ${jewelType} must NOT upgrade wings in inventory`);
+  }
+
+  // 4. Upgrading wings in Chaos Machine from +0 to +9 costs 1 Bless + 1 Soul + 1 Chaos per level
+  let state = craftedT2.nextState;
+  for (let targetLvl = 1; targetLvl <= 9; targetLvl++) {
+    const beforeJewels = { ...state.jewels };
+    const upgRes = upgradeWingsInChaosMachine(state);
+    assert.equal(upgRes.success, true, `Should upgrade wings to +${targetLvl}`);
+    assert.equal(upgRes.nextState.equipped.wings?.level, targetLvl);
+    assert.equal(upgRes.nextState.jewels.bless, beforeJewels.bless - 1);
+    assert.equal(upgRes.nextState.jewels.soul, beforeJewels.soul - 1);
+    assert.equal(upgRes.nextState.jewels.chaos, beforeJewels.chaos - 1);
+    state = upgRes.nextState;
+  }
+  assert.equal(state.equipped.wings?.level, 9);
+
+  // 5. Evolving Tier 2 (+9) wings into Tier 3 wings preserves +9 level (does NOT add +2!) and blocks re-crafting Tier 3
+  const evolvedT3 = craftChaosWings(state);
+  assert.equal(evolvedT3.success, true);
+  assert.equal(evolvedT3.nextState.equipped.wings?.rarity, 'ancient');
+  assert.equal(evolvedT3.nextState.equipped.wings?.level, 9);
+  state = evolvedT3.nextState;
+
+  const recraftT3 = craftChaosWings(state);
+  assert.equal(recraftT3.success, false, 'Cannot re-craft Tier 3 wings');
+
+  // 6. Upgrading from +9 to +10 ("на +10 и выше") fails if player only has 2 of any required jewel
+  const insufficientFor10 = upgradeWingsInChaosMachine({
+    ...state,
+    jewels: { bless: 3, soul: 2, chaos: 3, life: 5 },
+  });
+  assert.equal(insufficientFor10.success, false, 'Upgrading to +10 must fail with only 2 Souls');
+
+  // 7. Upgrading from +9 through +15 ("на +10 и выше") costs 3 Bless + 3 Soul + 3 Chaos per level
+  for (let targetLvl = 10; targetLvl <= 15; targetLvl++) {
+    const beforeJewels = { ...state.jewels };
+    const upgRes = upgradeWingsInChaosMachine(state);
+    assert.equal(upgRes.success, true, `Should upgrade wings to +${targetLvl}`);
+    assert.equal(upgRes.nextState.equipped.wings?.level, targetLvl);
+    assert.equal(upgRes.nextState.jewels.bless, beforeJewels.bless - 3);
+    assert.equal(upgRes.nextState.jewels.soul, beforeJewels.soul - 3);
+    assert.equal(upgRes.nextState.jewels.chaos, beforeJewels.chaos - 3);
+    state = upgRes.nextState;
+  }
+  assert.equal(state.equipped.wings?.level, 15);
+
+  // 8. At +15 max level, further upgrades are rejected
+  const beyond15 = upgradeWingsInChaosMachine(state);
+  assert.equal(beyond15.success, false);
+});
+
+
+
 
 
