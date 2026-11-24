@@ -3,6 +3,7 @@ import {
   calculateDerivedStats,
   getClassDisplayTitle,
   getFirstProfQuestItemName,
+  getGrandResetRequirements,
 } from '../game/rules';
 import { CharacterAttributes, PlayerProgressState } from '../game/types';
 
@@ -26,6 +27,7 @@ export const CharacterStatsModal: React.FC<CharacterStatsModalProps> = ({
   const derived = calculateDerivedStats(player);
   const displayTitle = getClassDisplayTitle(player.classId, player.classTier);
   const questItemName = getFirstProfQuestItemName(player.classId);
+  const resetReq = getGrandResetRequirements(player.resets);
 
   const statRows: { key: keyof CharacterAttributes; label: string; desc: string }[] = [
     { key: 'str', label: 'Сила (STR)', desc: 'Физический урон и пробитие брони' },
@@ -53,7 +55,11 @@ export const CharacterStatsModal: React.FC<CharacterStatsModalProps> = ({
             </h2>
           </div>
           <p className="mt-0.5 font-mono-num text-[11px] text-[#bfb5a4]">
-            Уровень {player.level} · Ресеты: {player.resets} · Боевая мощь: {derived.combatPower}
+            Уровень {player.level} · Ресеты: {player.resets}
+            {resetReq.currentTerritoryLevelReduction > 0
+              ? ` (−${resetReq.currentTerritoryLevelReduction} ур. к городам)`
+              : ''}{' '}
+            · Боевая мощь: {derived.combatPower}
           </p>
         </div>
 
@@ -170,7 +176,7 @@ export const CharacterStatsModal: React.FC<CharacterStatsModalProps> = ({
           </div>
         </div>
 
-        {/* Quest of Priestess Sevina (1st Profession @ Lvl 50 + Quest Item) & Grand Reset @ Lvl 300 */}
+        {/* Quest of Priestess Sevina (1st Profession @ Lvl 50 + Quest Item) & Grand Reset */}
         <div className="rounded-xl border border-amber-500/30 bg-[#181322] p-3">
           <div className="flex flex-col gap-1.5">
             <div className="flex flex-wrap items-center justify-between gap-1">
@@ -216,14 +222,13 @@ export const CharacterStatsModal: React.FC<CharacterStatsModalProps> = ({
                 type="button"
                 onClick={() => setStatusBanner(onGrandReset())}
                 className="gothic-button min-h-[36px] rounded-xl px-2.5 py-1 text-[11px] font-semibold text-sky-200 cursor-pointer whitespace-nowrap"
-                title={`Гранд Ресет с 300 ур.: сжигает все вкачанные очки до базовых статов, выдаёт ${(player.resets + 1) * 350} очк. (${player.resets + 1}×350) и умножает АТК/ЗАЩ на +45% за каждый Ресет`}
+                title={`Гранд Ресет #${resetReq.nextResetNumber} с ${resetReq.requiredLevel} ур. за ${resetReq.zenCost.toLocaleString('ru-RU')} Zen: сжигает все вкачанные очки до базовых статов, выдаёт ${resetReq.bonusStatPoints} очк., даёт −5 ур. к телепорту в каждый город и +45% к АТК/ЗАЩ`}
               >
-                Ресет ({player.level}/300) · +{(player.resets + 1) * 350} очк.
+                Ресет #{resetReq.nextResetNumber} ({player.level}/{resetReq.requiredLevel}) · {Math.round(resetReq.zenCost / 1000)}к Zen
               </button>
             </div>
             <p className="text-[10px] leading-snug text-sky-300/90 font-mono-num">
-              Гранд Ресет (300 Ур.): сжигает все вкачанные очки до базы и даёт{' '}
-              {(player.resets + 1) * 350} очк. ({player.resets + 1}×350; 1 ресет — 350, 2 — 700, 3 — 1050) +45% к АТК/ЗАЩ
+              Ресет #{resetReq.nextResetNumber} (Ур. {resetReq.requiredLevel}, {resetReq.zenCost.toLocaleString('ru-RU')} Zen): даёт {resetReq.bonusStatPoints} очк. ({resetReq.nextResetNumber}×350), +45% АТК/ЗАЩ и −{resetReq.nextTerritoryLevelReduction} ур. к телепорту в города
             </p>
           </div>
         </div>
@@ -231,3 +236,4 @@ export const CharacterStatsModal: React.FC<CharacterStatsModalProps> = ({
     </div>
   );
 };
+

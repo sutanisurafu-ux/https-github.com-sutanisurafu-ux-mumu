@@ -737,7 +737,7 @@ export function sanitizeGroundLootDrop(raw: unknown, nowMs = Date.now()): LootDr
 }
 
 export function getEquipmentRarityColor(rarity: ItemRarity): string {
-  if (rarity === 'ancient') return '#f59e0b';
+  if (rarity === 'ancient') return '#c084fc';
   if (rarity === 'excellent') return '#34d399';
   if (rarity === 'magic') return '#38bdf8';
   return '#e7e5e4';

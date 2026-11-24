@@ -2,6 +2,7 @@ import React from 'react';
 import {
   calculateItemEffectiveAttack,
   calculateItemEffectiveDefense,
+  calculateWingUpgradeBonus,
 } from '../game/rules';
 import {
   EquipmentItem,
@@ -78,18 +79,18 @@ const RARITY_LABELS: Record<ItemRarity, string> = {
 };
 
 function getRarityTitleColor(rarity: ItemRarity): string {
-  if (rarity === 'ancient') return 'text-amber-300';
-  if (rarity === 'excellent') return 'text-emerald-300';
+  if (rarity === 'ancient') return 'text-purple-300 drop-shadow-[0_0_6px_rgba(192,132,252,0.55)]';
+  if (rarity === 'excellent') return 'text-emerald-300 drop-shadow-[0_0_6px_rgba(52,211,153,0.55)]';
   if (rarity === 'magic') return 'text-sky-300';
   return 'text-[#fdf8ed]';
 }
 
 function getRarityBadgeClass(rarity: ItemRarity): string {
   if (rarity === 'ancient') {
-    return 'border-amber-400/70 bg-amber-500/20 text-amber-200';
+    return 'border-purple-400/80 bg-purple-500/25 text-purple-200 shadow-[0_0_10px_rgba(192,132,252,0.35)]';
   }
   if (rarity === 'excellent') {
-    return 'border-emerald-400/70 bg-emerald-500/20 text-emerald-200';
+    return 'border-emerald-400/80 bg-emerald-500/25 text-emerald-200 shadow-[0_0_10px_rgba(52,211,153,0.35)]';
   }
   if (rarity === 'magic') {
     return 'border-sky-400/70 bg-sky-500/20 text-sky-200';
@@ -186,6 +187,14 @@ export const ItemHoverTooltip: React.FC<{
                 <span className="text-[#b5ab9b]">Скорость бега:</span>
                 <span className="font-bold text-sky-200">
                   +{target.item.moveSpeedBonus}
+                </span>
+              </div>
+            )}
+            {target.item.slot === 'wings' && (
+              <div className="flex items-center justify-between">
+                <span className="text-[#b5ab9b]">Макс. скорость (+1%/ур.):</span>
+                <span className="font-bold text-emerald-300">
+                  +{calculateWingUpgradeBonus(target.item).speedBonusPct}% · Размах +{calculateWingUpgradeBonus(target.item).visualGrowthPct}%
                 </span>
               </div>
             )}

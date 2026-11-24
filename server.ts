@@ -1188,7 +1188,7 @@ async function startServer() {
           partyId: existingParty ? existingParty.partyId : null,
           classId: sanitizeClassId(msg.classId ?? existing?.classId),
           classTier: sanitizeClassTier(msg.classTier ?? existing?.classTier),
-          level: clampPositiveInt(msg.level, existing?.level ?? 1, 400),
+          level: clampPositiveInt(msg.level, existing?.level ?? 1, 9999),
           resets: clampPositiveInt(msg.resets, existing?.resets ?? 0, 999),
           hp: clampPositiveInt(msg.hp, existing?.hp ?? 350, 100_000_000),
           maxHp: Math.max(1, clampPositiveInt(msg.maxHp, existing?.maxHp ?? 350, 100_000_000)),
@@ -1291,7 +1291,7 @@ async function startServer() {
         }
         member.classId = sanitizeClassId(msg.classId ?? member.classId);
         member.classTier = sanitizeClassTier(msg.classTier ?? member.classTier);
-        member.level = clampPositiveInt(msg.level, member.level, 400);
+        member.level = clampPositiveInt(msg.level, member.level, 9999);
         member.resets = clampPositiveInt(msg.resets, member.resets, 999);
         member.hp = clampPositiveInt(msg.hp, member.hp, 100_000_000);
         member.maxHp = Math.max(1, clampPositiveInt(msg.maxHp, member.maxHp, 100_000_000));

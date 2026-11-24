@@ -32,18 +32,18 @@ const SLOT_LABELS: Record<ItemSlot, string> = {
 };
 
 function getRarityTextClass(rarity?: ItemRarity): string {
-  if (rarity === 'ancient') return 'text-amber-300';
-  if (rarity === 'excellent') return 'text-emerald-300';
+  if (rarity === 'ancient') return 'text-purple-300 drop-shadow-[0_0_6px_rgba(192,132,252,0.55)]';
+  if (rarity === 'excellent') return 'text-emerald-300 drop-shadow-[0_0_6px_rgba(52,211,153,0.55)]';
   if (rarity === 'magic') return 'text-sky-300';
   return 'text-[#f3efe6]';
 }
 
 function getRarityBorderClass(rarity?: ItemRarity): string {
   if (rarity === 'ancient') {
-    return 'border-amber-400 bg-amber-500/20';
+    return 'border-purple-400/90 bg-purple-500/25 shadow-[0_0_15px_rgba(192,132,252,0.42),inset_0_0_12px_rgba(192,132,252,0.28)]';
   }
   if (rarity === 'excellent') {
-    return 'border-emerald-400/80 bg-emerald-500/20';
+    return 'border-emerald-400/90 bg-emerald-500/25 shadow-[0_0_15px_rgba(52,211,153,0.42),inset_0_0_12px_rgba(52,211,153,0.28)]';
   }
   if (rarity === 'magic') {
     return 'border-sky-400/75 bg-sky-500/20';

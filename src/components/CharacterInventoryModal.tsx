@@ -1,11 +1,16 @@
 import React, { useState } from 'react';
 import {
+  resolveArmorSetVisualStyle,
+  resolveWeaponVisualStyle,
+} from '../game/models';
+import {
   calculateDerivedStats,
   calculateItemEffectiveAttack,
   calculateItemEffectiveDefense,
   getFirstProfQuestItemName,
 } from '../game/rules';
 import {
+  CharacterClassId,
   EquipmentItem,
   ItemRarity,
   ItemSlot,
@@ -59,10 +64,10 @@ const SLOT_LABELS: Record<ItemSlot, string> = {
 
 function getRarityBorderClass(rarity?: ItemRarity): string {
   if (rarity === 'ancient') {
-    return 'border-amber-400 bg-gradient-to-br from-amber-500/20 via-emerald-500/15 to-[#14111d] shadow-[inset_0_0_12px_rgba(251,191,36,0.28)]';
+    return 'border-purple-400/90 bg-gradient-to-br from-purple-500/25 via-purple-900/20 to-[#14111d] shadow-[0_0_15px_rgba(192,132,252,0.42),inset_0_0_12px_rgba(192,132,252,0.28)]';
   }
   if (rarity === 'excellent') {
-    return 'border-emerald-400/80 bg-gradient-to-br from-emerald-500/20 to-[#14111d] shadow-[inset_0_0_10px_rgba(52,211,153,0.22)]';
+    return 'border-emerald-400/90 bg-gradient-to-br from-emerald-500/25 via-emerald-900/20 to-[#14111d] shadow-[0_0_15px_rgba(52,211,153,0.42),inset_0_0_12px_rgba(52,211,153,0.28)]';
   }
   if (rarity === 'magic') {
     return 'border-sky-400/75 bg-gradient-to-br from-sky-500/20 to-[#14111d]';
@@ -71,96 +76,331 @@ function getRarityBorderClass(rarity?: ItemRarity): string {
 }
 
 function getRarityTextClass(rarity?: ItemRarity): string {
-  if (rarity === 'ancient') return 'text-amber-300';
-  if (rarity === 'excellent') return 'text-emerald-300';
+  if (rarity === 'ancient') return 'text-purple-300 drop-shadow-[0_0_6px_rgba(192,132,252,0.55)]';
+  if (rarity === 'excellent') return 'text-emerald-300 drop-shadow-[0_0_6px_rgba(52,211,153,0.55)]';
   if (rarity === 'magic') return 'text-sky-300';
   return 'text-[#f3efe6]';
 }
 
-const SlotSvgIcon: React.FC<{ slot: ItemSlot; rarity?: ItemRarity; className?: string }> = ({
-  slot,
-  rarity,
-  className = 'h-7 w-7',
-}) => {
-  const strokeColor =
-    rarity === 'ancient'
-      ? '#fbbf24'
-      : rarity === 'excellent'
+function inferItemClassId(item?: EquipmentItem | null): CharacterClassId {
+  const n = item?.name ?? '';
+  if (/Посох|Жезл|Скипетр|Мантия|Роба|Одеяние|Венец|Повязка|Тиара Атланса|Анубиса|Кундуна|Ахерона/i.test(n)) {
+    return 'dark_wizard';
+  }
+  if (/Лук|Арбалет|Туника|Обруч|Сирены|Валькирии|Сильфиды|Никси|Крайвульфа|Красного Духа/i.test(n)) {
+    return 'fairy_elf';
+  }
+  return 'dark_knight';
+}
+
+const SlotSvgIcon: React.FC<{
+  slot: ItemSlot;
+  rarity?: ItemRarity;
+  item?: EquipmentItem | null;
+  className?: string;
+}> = ({ slot, rarity, item, className = 'h-7 w-7' }) => {
+  const effectiveRarity = item?.rarity ?? rarity;
+  const isExe = effectiveRarity === 'excellent';
+  const isAnc = effectiveRarity === 'ancient';
+  const lvl = item?.level ?? 0;
+  const hasWhiteSheen = lvl >= 10;
+  const whiteSheenOpacity = hasWhiteSheen ? Math.min(0.32, 0.16 + (lvl - 10) * 0.03) : 0;
+  const glowClass = isAnc
+    ? ' drop-shadow-[0_0_6px_rgba(192,132,252,0.82)]'
+    : isExe
+      ? ' drop-shadow-[0_0_6px_rgba(52,211,153,0.82)]'
+      : lvl >= 6
+        ? ' drop-shadow-[0_0_5px_rgba(255,255,255,0.45)]'
+        : '';
+  const svgClass = `${className}${glowClass}`;
+  const fallbackColor =
+    effectiveRarity === 'ancient'
+      ? '#c084fc'
+      : effectiveRarity === 'excellent'
         ? '#34d399'
-        : rarity === 'magic'
+        : effectiveRarity === 'magic'
           ? '#38bdf8'
           : '#9ca3af';
+  const name = item?.name ?? '';
+  const itemClassId = inferItemClassId(item);
 
   if (slot === 'weapon') {
+    const wStyle = item ? resolveWeaponVisualStyle(itemClassId, item) : null;
+    const primary = wStyle ? wStyle.bladePrimary : fallbackColor;
+    const secondary = wStyle ? wStyle.bladeSecondary : fallbackColor;
+    const guard = wStyle ? wStyle.guardColor : '#fde047';
+    const gem = wStyle ? wStyle.gemColor : fallbackColor;
+    const shaft = wStyle ? wStyle.shaftColor : '#d97706';
+
+    if (/Посох|Жезл|Скипетр/i.test(name)) {
+      const isWandOrScepter = /Жезл|Скипетр/i.test(name);
+      return (
+        <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
+          <line x1="6" y1="26" x2="22" y2="10" stroke={shaft} strokeWidth="2.6" strokeLinecap="round" />
+          {isWandOrScepter ? (
+            <polygon
+              points="23,4 28,9 23,14 18,9"
+              fill={primary}
+              fillOpacity="0.45"
+              stroke={guard}
+              strokeWidth="1.6"
+            />
+          ) : (
+            <path
+              d="M18 6 C24 3 29 8 26 14"
+              fill="none"
+              stroke={guard}
+              strokeWidth="2.1"
+              strokeLinecap="round"
+            />
+          )}
+          <circle cx="23.5" cy="8.5" r="3.3" fill={gem} stroke="#ffffff" strokeWidth="1.2" />
+          {hasWhiteSheen && (
+            <line
+              x1="10"
+              y1="21"
+              x2="24"
+              y2="7"
+              stroke="#ffffff"
+              strokeOpacity={whiteSheenOpacity}
+              strokeWidth="2.2"
+              strokeLinecap="round"
+            />
+          )}
+        </svg>
+      );
+    }
+    if (/Арбалет/i.test(name)) {
+      return (
+        <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
+          <line x1="6" y1="26" x2="24" y2="8" stroke={shaft} strokeWidth="2.5" strokeLinecap="round" />
+          <path
+            d="M9 8 C17 6 26 15 24 23"
+            fill="none"
+            stroke={primary}
+            strokeWidth="2.6"
+            strokeLinecap="round"
+          />
+          <line x1="9" y1="8" x2="24" y2="23" stroke={guard} strokeWidth="1.1" />
+          <circle cx="18" cy="14" r="2" fill={gem} />
+          {hasWhiteSheen && (
+            <line
+              x1="11"
+              y1="10"
+              x2="23"
+              y2="20"
+              stroke="#ffffff"
+              strokeOpacity={whiteSheenOpacity}
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          )}
+        </svg>
+      );
+    }
+    if (/Лук/i.test(name)) {
+      const isWinged = /Крылатый|Серебряного Крыла|Раклиона/i.test(name);
+      return (
+        <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
+          <path
+            d="M9 5 C21 7 25 11 27 23"
+            fill="none"
+            stroke={primary}
+            strokeWidth="2.6"
+            strokeLinecap="round"
+          />
+          {isWinged && (
+            <path
+              d="M12 7 C20 9 23 12 25 20"
+              fill="none"
+              stroke={guard}
+              strokeWidth="1.3"
+            />
+          )}
+          <line x1="9" y1="5" x2="27" y2="23" stroke="#e2e8f0" strokeWidth="1.1" />
+          <line x1="11" y1="21" x2="24" y2="8" stroke={gem} strokeWidth="1.9" strokeLinecap="round" />
+          {hasWhiteSheen && (
+            <line
+              x1="12"
+              y1="6"
+              x2="25"
+              y2="19"
+              stroke="#ffffff"
+              strokeOpacity={whiteSheenOpacity}
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          )}
+        </svg>
+      );
+    }
+    if (/Трезубец/i.test(name)) {
+      return (
+        <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
+          <line x1="5" y1="27" x2="23" y2="9" stroke={shaft} strokeWidth="2.3" strokeLinecap="round" />
+          <path
+            d="M17 7 L27 5 L25 15 M21 3 L26 8 L29 11"
+            fill="none"
+            stroke={primary}
+            strokeWidth="2.1"
+            strokeLinecap="round"
+          />
+          <circle cx="21" cy="11" r="1.8" fill={gem} />
+        </svg>
+      );
+    }
+    if (/Коса/i.test(name)) {
+      return (
+        <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
+          <line x1="6" y1="27" x2="24" y2="7" stroke={shaft} strokeWidth="2.4" strokeLinecap="round" />
+          <path
+            d="M21 6 C29 8 30 17 23 22 C24 15 22 11 18 9 Z"
+            fill={primary}
+            stroke={guard}
+            strokeWidth="1.4"
+          />
+        </svg>
+      );
+    }
+    const isHeavyBlade = /Разрушения|Заикана|Феникса|Бездны|Королевский|Архангела/i.test(name);
     return (
-      <svg viewBox="0 0 32 32" className={className} aria-hidden="true">
+      <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
         <path
-          d="M25 4 L28 7 L13 22 L9 22 L9 18 Z"
-          fill={strokeColor}
-          fillOpacity="0.28"
-          stroke={strokeColor}
+          d={isHeavyBlade ? 'M25 3 L29 7 L14 22 L8 22 L8 16 Z' : 'M25 4 L28 7 L13 22 L9 22 L9 18 Z'}
+          fill={secondary}
+          fillOpacity="0.55"
+          stroke={primary}
           strokeWidth="2"
         />
-        <path d="M7 16 L16 25 M5 27 L10 22" stroke="#fde047" strokeWidth="2.4" strokeLinecap="round" />
+        <line x1="12" y1="19" x2="25" y2="6" stroke={gem} strokeWidth="1.3" />
+        <path d="M7 16 L16 25 M5 27 L10 22" stroke={guard} strokeWidth="2.4" strokeLinecap="round" />
+        {hasWhiteSheen && (
+          <line
+            x1="11"
+            y1="18"
+            x2="25"
+            y2="5"
+            stroke="#ffffff"
+            strokeOpacity={whiteSheenOpacity}
+            strokeWidth="2.2"
+            strokeLinecap="round"
+          />
+        )}
       </svg>
     );
   }
   if (slot === 'armor') {
+    const aStyle = item ? resolveArmorSetVisualStyle(itemClassId, item, null) : null;
+    const primary = aStyle ? aStyle.primaryColor : fallbackColor;
+    const trim = aStyle ? aStyle.trimColor : '#fde047';
+    const gem = aStyle ? aStyle.gemColor : '#fef08a';
+    const isRobe = itemClassId === 'dark_wizard';
+    const strokeHighlight = isAnc ? '#c084fc' : isExe ? '#34d399' : trim;
     return (
-      <svg viewBox="0 0 32 32" className={className} aria-hidden="true">
+      <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
         <path
-          d="M10 5 L16 8 L22 5 L27 10 L24 15 L22 14 L22 27 L10 27 L10 14 L8 15 L5 10 Z"
-          fill={strokeColor}
-          fillOpacity="0.28"
-          stroke={strokeColor}
-          strokeWidth="2"
+          d={
+            isRobe
+              ? 'M10 5 L16 8 L22 5 L28 10 L25 16 L22 14 L24 27 L8 27 L10 14 L7 16 L4 10 Z'
+              : 'M10 5 L16 8 L22 5 L28 9 L25 15 L22 14 L22 27 L10 27 L10 14 L7 15 L4 9 Z'
+          }
+          fill={primary}
+          fillOpacity="0.52"
+          stroke={strokeHighlight}
+          strokeWidth="1.9"
           strokeLinejoin="round"
         />
-        <path d="M16 9 L16 25" stroke="#fde047" strokeWidth="1.6" />
+        <path d="M11 11 L16 15 L21 11 M16 9 L16 25" stroke={trim} strokeWidth="1.4" fill="none" />
+        <circle cx="16" cy="14" r="2.1" fill={gem} />
+        {hasWhiteSheen && (
+          <ellipse
+            cx="15"
+            cy="13"
+            rx="5"
+            ry="4"
+            fill="#ffffff"
+            fillOpacity={whiteSheenOpacity}
+          />
+        )}
       </svg>
     );
   }
   if (slot === 'helm') {
+    const hStyle = item ? resolveArmorSetVisualStyle(itemClassId, null, item) : null;
+    const primary = hStyle ? hStyle.helmPrimaryColor : fallbackColor;
+    const trim = hStyle ? hStyle.helmTrimColor : '#fde047';
+    const gem = hStyle ? hStyle.helmGemColor : '#fef08a';
+    const isCrownOrTiara = /Корона|Диадема|Тиара|Венец|Обруч|Повязка/i.test(name);
+    const strokeHighlight = isAnc ? '#c084fc' : isExe ? '#34d399' : trim;
     return (
-      <svg viewBox="0 0 32 32" className={className} aria-hidden="true">
+      <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
         <path
-          d="M6 9 L10 13 M26 9 L22 13"
-          stroke="#fde047"
-          strokeWidth="2.4"
-          strokeLinecap="round"
-        />
-        <path
-          d="M9 15 C9 10 23 10 23 15 L23 25 L18 23 L16 26 L14 23 L9 25 Z"
-          fill={strokeColor}
-          fillOpacity="0.28"
-          stroke={strokeColor}
+          d={
+            isCrownOrTiara
+              ? 'M6 17 L9 8 L13 13 L16 6 L19 13 L23 8 L26 17 Z'
+              : 'M5 8 L10 13 M27 8 L22 13 M16 5 L16 10'
+          }
+          fill={isCrownOrTiara ? primary : 'none'}
+          fillOpacity="0.55"
+          stroke={strokeHighlight}
           strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
         />
+        {!isCrownOrTiara && (
+          <path
+            d="M9 15 C9 10 23 10 23 15 L23 25 L18 23 L16 26 L14 23 L9 25 Z"
+            fill={primary}
+            fillOpacity="0.52"
+            stroke={strokeHighlight}
+            strokeWidth="1.9"
+          />
+        )}
+        <circle cx="16" cy={isCrownOrTiara ? '14' : '18'} r="2" fill={gem} />
+        {hasWhiteSheen && (
+          <circle
+            cx="14.5"
+            cy="14.5"
+            r="3.8"
+            fill="#ffffff"
+            fillOpacity={whiteSheenOpacity}
+          />
+        )}
       </svg>
     );
   }
   if (slot === 'wings') {
+    const isTier3 = effectiveRarity === 'ancient' || /III|Шторма|Вечности|Иллюзии/i.test(name);
     return (
-      <svg viewBox="0 0 32 32" className={className} aria-hidden="true">
+      <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
         <path
-          d="M15 18 C11 8 4 6 3 13 C5 19 10 22 15 22 Z M17 18 C21 8 28 6 29 13 C27 19 22 22 17 22 Z"
-          fill={strokeColor}
-          fillOpacity="0.32"
-          stroke={strokeColor}
-          strokeWidth="2"
+          d="M15 19 C11 6 3 4 2 12 C3 18 8 23 15 23 Z M17 19 C21 6 29 4 30 12 C29 18 24 23 17 23 Z"
+          fill={fallbackColor}
+          fillOpacity="0.38"
+          stroke={fallbackColor}
+          strokeWidth="1.8"
         />
+        <path
+          d="M14 17 C10 11 5 10 4 15 M18 17 C22 11 27 10 28 15"
+          fill="none"
+          stroke="#fef08a"
+          strokeWidth="1.2"
+        />
+        {isTier3 && (
+          <circle cx="16" cy="14" r="2.2" fill="#fef08a" />
+        )}
       </svg>
     );
   }
   if (slot === 'ring') {
     return (
-      <svg viewBox="0 0 32 32" className={className} aria-hidden="true">
+      <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
         <circle
           cx="16"
           cy="18"
           r="8"
           fill="none"
-          stroke={strokeColor}
+          stroke={fallbackColor}
           strokeWidth="2.6"
         />
         <polygon points="16,6 20,10 16,13 12,10" fill="#fde047" />
@@ -168,13 +408,13 @@ const SlotSvgIcon: React.FC<{ slot: ItemSlot; rarity?: ItemRarity; className?: s
     );
   }
   return (
-    <svg viewBox="0 0 32 32" className={className} aria-hidden="true">
+    <svg viewBox="0 0 32 32" className={svgClass} aria-hidden="true">
       <path d="M10 6 C10 14 22 14 22 6" fill="none" stroke="#d4a853" strokeWidth="1.8" />
       <polygon
         points="16,12 22,19 16,27 10,19"
-        fill={strokeColor}
+        fill={fallbackColor}
         fillOpacity="0.35"
-        stroke={strokeColor}
+        stroke={fallbackColor}
         strokeWidth="2"
       />
     </svg>
@@ -636,7 +876,7 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
 
         <div className="flex items-center gap-2 min-w-0">
           <div className="shrink-0 opacity-90">
-            <SlotSvgIcon slot={slot} rarity={item?.rarity} className="h-6 w-6" />
+            <SlotSvgIcon slot={slot} rarity={item?.rarity} item={item} className="h-6 w-6" />
           </div>
           {item ? (
             <div className="min-w-0 flex-1">
@@ -1065,7 +1305,7 @@ export const CharacterInventoryModal: React.FC<CharacterInventoryModalProps> = (
                         item.rarity
                       )} ${isSelected ? 'ring-2 ring-amber-400' : 'hover:border-amber-300'}`}
                     >
-                      <SlotSvgIcon slot={item.slot} rarity={item.rarity} className="h-6 w-6" />
+                      <SlotSvgIcon slot={item.slot} rarity={item.rarity} item={item} className="h-6 w-6" />
                       <span
                         className={`mt-0.5 max-w-full truncate px-0.5 text-[9px] font-bold ${getRarityTextClass(
                           item.rarity

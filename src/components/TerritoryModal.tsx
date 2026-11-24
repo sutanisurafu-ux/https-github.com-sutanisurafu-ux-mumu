@@ -195,7 +195,10 @@ export const TerritoryModal: React.FC<TerritoryModalProps> = ({
               </button>
             </div>
             <span className="font-mono-num text-[11px] text-amber-300 sm:text-xs">
-              Открыто (Ур. {player.level}): {TERRITORIES.filter((t) => canEnterTerritory(player.level, t.id).allowed).length} / {TERRITORIES.length}
+              Открыто (Ур. {player.level}
+              {player.resets > 0 ? `, −${player.resets * 5} ур. от ${player.resets} рес.` : ''}):{' '}
+              {TERRITORIES.filter((t) => canEnterTerritory(player.level, t.id, player.resets).allowed).length} /{' '}
+              {TERRITORIES.length}
             </span>
           </div>
 
@@ -203,7 +206,9 @@ export const TerritoryModal: React.FC<TerritoryModalProps> = ({
           <div className="grid grid-cols-1 gap-2.5 p-3.5 pb-6 sm:grid-cols-2 sm:gap-3 sm:p-5 lg:grid-cols-3">
             {filteredTerritories.map(({ territory, idx }) => {
               const isCurrent = !player.inBloodCastle && player.territoryId === territory.id;
-              const isLocked = !canEnterTerritory(player.level, territory.id).allowed;
+              const entryCheck = canEnterTerritory(player.level, territory.id, player.resets);
+              const isLocked = !entryCheck.allowed;
+              const effectiveReqLevel = entryCheck.requiredLevel;
               const dropsChaosFromMobs = territory.recommendedLevel >= 150;
               const lootTier = getTerritoryLootTierLabel(idx);
               const mapLayout = getTerritoryMapLayout(territory.id);
@@ -234,7 +239,9 @@ export const TerritoryModal: React.FC<TerritoryModalProps> = ({
                         </span>
                       </div>
                       <span className="font-mono-num text-[11px] text-amber-300">
-                        Треб. Ур. {territory.recommendedLevel}+ · ×{territory.enemyLevelMultiplier.toFixed(1)}
+                        Треб. Ур. {effectiveReqLevel}+
+                        {entryCheck.levelReduction > 0 ? ` (−${entryCheck.levelReduction})` : ''} · ×
+                        {territory.enemyLevelMultiplier.toFixed(1)}
                       </span>
                     </div>
                     <p className="mt-1 text-[11px] text-[#bfb6a6]">{territory.subtitle}</p>
@@ -268,8 +275,10 @@ export const TerritoryModal: React.FC<TerritoryModalProps> = ({
                       }`}
                     >
                       {isLocked
-                        ? `🔒 Требуется Ур. ${territory.recommendedLevel} (сейчас ${player.level})`
-                        : '🛡️ Доступно по уровню'}
+                        ? `🔒 Требуется Ур. ${effectiveReqLevel} (сейчас ${player.level})`
+                        : entryCheck.levelReduction > 0
+                          ? `🛡️ Доступно (−${entryCheck.levelReduction} ур. от ресетов)`
+                          : '🛡️ Доступно по уровню'}
                     </span>
                     <button
                       type="button"
@@ -280,7 +289,7 @@ export const TerritoryModal: React.FC<TerritoryModalProps> = ({
                       {isCurrent
                         ? 'Вы здесь'
                         : isLocked
-                          ? `Нужен Ур. ${territory.recommendedLevel}`
+                          ? `Нужен Ур. ${effectiveReqLevel}`
                           : 'Телепорт'}
                     </button>
                   </div>

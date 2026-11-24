@@ -53,7 +53,7 @@ export const HeroModelPreview: React.FC<HeroModelPreviewProps> = React.memo(({
       ctx.fillRect(0, 0, width, height);
 
       ctx.save();
-      ctx.translate(width / 2, height * 0.76);
+      ctx.translate(width / 2, height * (hasWings ? 0.8 : 0.77));
       drawHeroModel(ctx, {
         classId: player.classId,
         classTier: player.classTier,
@@ -79,21 +79,13 @@ export const HeroModelPreview: React.FC<HeroModelPreviewProps> = React.memo(({
       return;
     }
 
-    let rafId = 0;
-    let lastDraw = 0;
-    const loop = (ts: number) => {
-      // Smooth 30fps preview animation when floating with wings
-      if (ts - lastDraw >= 32) {
-        lastDraw = ts;
-        renderFrame(ts);
-      }
-      rafId = window.requestAnimationFrame(loop);
-    };
     renderFrame(performance.now());
-    rafId = window.requestAnimationFrame(loop);
+    const intervalId = window.setInterval(() => {
+      renderFrame(performance.now());
+    }, 80);
 
     return () => {
-      window.cancelAnimationFrame(rafId);
+      window.clearInterval(intervalId);
     };
   }, [
     player.classId,

@@ -118,19 +118,24 @@ test('1st profession evolution requires Level 50 AND dropped Quest Item, and Gra
   assert.equal(evo.nextState.hasFirstProfQuestItem, false);
   assert.equal(evo.nextState.statPoints, lvl50WithQuestItem.statPoints + 40);
 
-  // Grand Reset requires Level 300
-  const earlyReset = performGrandReset({ ...evo.nextState, level: 299 });
+  // Grand Reset #1 requires Level 300 and 100,000 Zen
+  const earlyReset = performGrandReset({ ...evo.nextState, level: 299, zen: 150_000 });
   assert.equal(earlyReset.success, false);
+
+  const brokeReset = performGrandReset({ ...evo.nextState, level: 300, zen: 50_000 });
+  assert.equal(brokeReset.success, false);
 
   const validReset = performGrandReset({
     ...evo.nextState,
     level: 300,
+    zen: 120_000,
     attributes: { str: 250, agi: 320, vit: 180, ene: 90 },
     statPoints: 45,
   });
   assert.equal(validReset.success, true);
   assert.equal(validReset.nextState.resets, 1);
   assert.equal(validReset.nextState.level, 1);
+  assert.equal(validReset.nextState.zen, 20_000);
   // All allocated & unspent points are burned back to base class attributes and replaced with 1 * 350 = 350 points
   assert.deepEqual(validReset.nextState.attributes, CLASSES.fairy_elf.baseAttributes);
   assert.equal(validReset.nextState.statPoints, 350);
@@ -321,6 +326,7 @@ test('Bosses drop Jewel of Chaos with 20% chance in ANY territory while regular 
   const lvl300Hero = {
     ...createInitialPlayerState('dark_knight'),
     level: 300,
+    zen: 150_000,
     attributes: { str: 400, agi: 250, vit: 200, ene: 100 },
   };
   const beforeResetStats = calculateDerivedStats(lvl300Hero);
@@ -1144,6 +1150,7 @@ test('Level-gated territory travel, Grand Reset returning hero to Lorencia, and 
   const lateGameHero = {
     ...createInitialPlayerState('dark_knight'),
     level: 300,
+    zen: 100_000,
     territoryId: 'kanturu_ruins' as const,
     inBloodCastle: true,
     highestReachedTerritoryIdx: 18,
@@ -1152,6 +1159,7 @@ test('Level-gated territory travel, Grand Reset returning hero to Lorencia, and 
   const resetRes = performGrandReset(lateGameHero);
   assert.equal(resetRes.success, true);
   assert.equal(resetRes.nextState.level, 1);
+  assert.equal(resetRes.nextState.zen, 0);
   assert.equal(resetRes.nextState.territoryId, 'lorencia');
   assert.equal(resetRes.nextState.inBloodCastle, false);
   assert.equal(resetRes.nextState.highestReachedTerritoryIdx, 0);
@@ -1851,49 +1859,53 @@ test('Grand Reset burns all previous allocated & unspent points and awards 350 *
 
   assert.equal(CHARACTER_SCALING.grandReset.bonusStatPoints, 350);
 
-  // Start as Dark Wizard, allocate heavy stats and reach level 300 with leftover points
+  // Start as Dark Wizard, allocate heavy stats and reach level 300 with leftover points and 500,000 Zen
   let hero = {
     ...createInitialPlayerState('dark_wizard'),
     level: 300,
+    zen: 500_000,
     attributes: { str: 120, agi: 240, vit: 310, ene: 780 },
     statPoints: 99,
   };
 
-  // Reset #1 -> all allocated stats burned to baseAttributes, statPoints strictly 350
+  // Reset #1 -> requires Level 300 and 100,000 Zen; all allocated stats burned to baseAttributes, statPoints strictly 350
   const r1 = performGrandReset(hero);
   assert.equal(r1.success, true);
   assert.equal(r1.nextState.resets, 1);
   assert.equal(r1.nextState.level, 1);
+  assert.equal(r1.nextState.zen, 400_000);
   assert.deepEqual(r1.nextState.attributes, CLASSES.dark_wizard.baseAttributes);
   assert.equal(r1.nextState.statPoints, 350);
 
-  // Spend all 350 points + level back to 300 with even more allocated stats
+  // Spend all 350 points + level back to 305 (required for Reset #2) with even more allocated stats
   hero = allocateStatPoint(r1.nextState, 'ene', 350);
   assert.equal(hero.statPoints, 0);
   assert.equal(hero.attributes.ene, CLASSES.dark_wizard.baseAttributes.ene + 350);
   hero = {
     ...hero,
-    level: 300,
+    level: 305,
     attributes: { str: 50, agi: 400, vit: 500, ene: 1200 },
     statPoints: 120,
   };
 
-  // Reset #2 -> all previous points burned to baseAttributes, statPoints strictly 700
+  // Reset #2 -> requires Level 305 and 150,000 Zen; all previous points burned to baseAttributes, statPoints strictly 700
   const r2 = performGrandReset(hero);
   assert.equal(r2.success, true);
   assert.equal(r2.nextState.resets, 2);
+  assert.equal(r2.nextState.zen, 250_000);
   assert.deepEqual(r2.nextState.attributes, CLASSES.dark_wizard.baseAttributes);
   assert.equal(r2.nextState.statPoints, 700);
 
-  // Reset #3 -> all previous points burned to baseAttributes, statPoints strictly 1050
+  // Reset #3 -> requires Level 310 and 200,000 Zen; all previous points burned to baseAttributes, statPoints strictly 1050
   const r3 = performGrandReset({
     ...r2.nextState,
-    level: 300,
+    level: 310,
     attributes: { str: 300, agi: 600, vit: 400, ene: 1500 },
     statPoints: 50,
   });
   assert.equal(r3.success, true);
   assert.equal(r3.nextState.resets, 3);
+  assert.equal(r3.nextState.zen, 50_000);
   assert.deepEqual(r3.nextState.attributes, CLASSES.dark_wizard.baseAttributes);
   assert.equal(r3.nextState.statPoints, 1050);
 });
@@ -2013,6 +2025,570 @@ test('Blood Castle death enforces single attempt (exits to origin city) and comp
   assert.equal(deathInNoria.nextState.territoryId, 'noria');
 });
 
+test('Wings grant +1% max movement speed per upgrade level (+0..+15), scale larger visually with level, and armor sets & weapons resolve to distinct visual tiers', async () => {
+  const { calculateWingUpgradeBonus, craftChaosWings } = await import('./rules');
+  const {
+    getWingVisualMetrics,
+    resolveArmorSetVisualStyle,
+    resolveWeaponVisualStyle,
+  } = await import('./models');
+
+  // 1. Verify +1% speed bonus per wing upgrade level (+0..+15) and visual growth
+  const basePlayer = {
+    ...createInitialPlayerState('dark_knight'),
+    zen: 10000,
+    jewels: { bless: 10, soul: 10, life: 10, chaos: 5 },
+    // Give high AGI so hero reaches standard moveSpeedCap (350)
+    attributes: { str: 100, agi: 300, vit: 100, ene: 100 },
+  };
+  const noWingStats = calculateDerivedStats(basePlayer);
+  assert.equal(noWingStats.moveSpeed, 350);
+
+  const crafted = craftChaosWings(basePlayer);
+  assert.equal(crafted.success, true);
+  const wings0 = { ...crafted.craftedWings!, level: 0 };
+  const wings5 = { ...crafted.craftedWings!, level: 5 };
+  const wings10 = { ...crafted.craftedWings!, level: 10 };
+  const wings15 = { ...crafted.craftedWings!, level: 15 };
+
+  assert.equal(calculateWingUpgradeBonus(wings0).speedBonusPct, 0);
+  assert.equal(calculateWingUpgradeBonus(wings5).speedBonusPct, 5);
+  assert.equal(calculateWingUpgradeBonus(wings10).speedBonusPct, 10);
+  assert.equal(calculateWingUpgradeBonus(wings15).speedBonusPct, 15);
+
+  const stats0 = calculateDerivedStats({
+    ...basePlayer,
+    equipped: { ...basePlayer.equipped, wings: wings0 },
+  });
+  const stats5 = calculateDerivedStats({
+    ...basePlayer,
+    equipped: { ...basePlayer.equipped, wings: wings5 },
+  });
+  const stats10 = calculateDerivedStats({
+    ...basePlayer,
+    equipped: { ...basePlayer.equipped, wings: wings10 },
+  });
+  const stats15 = calculateDerivedStats({
+    ...basePlayer,
+    equipped: { ...basePlayer.equipped, wings: wings15 },
+  });
+
+  // +0 wings at max speed cap = 350; +5 = 350 * 1.05 = 368; +10 = 350 * 1.10 = 385; +15 = 350 * 1.15 = 403
+  assert.equal(stats0.moveSpeed, 350);
+  assert.equal(stats5.moveSpeed, Math.round(350 * 1.05));
+  assert.equal(stats10.moveSpeed, Math.round(350 * 1.1));
+  assert.equal(stats15.moveSpeed, Math.round(350 * 1.15));
+
+  // 2. Verify wing visual size grows monotonically with upgrade level (+0 < +5 < +10 < +15)
+  const vis0 = getWingVisualMetrics(wings0, 'dark_knight');
+  const vis5 = getWingVisualMetrics(wings5, 'dark_knight');
+  const vis10 = getWingVisualMetrics(wings10, 'dark_knight');
+  const vis15 = getWingVisualMetrics(wings15, 'dark_knight');
+  assert.ok(vis0.effectiveSpan < vis5.effectiveSpan);
+  assert.ok(vis5.effectiveSpan < vis10.effectiveSpan);
+  assert.ok(vis10.effectiveSpan < vis15.effectiveSpan);
+
+  // 3. Verify distinct armor set visual tiers across early, mid, and endgame sets
+  const dkLeather = resolveArmorSetVisualStyle(
+    'dark_knight',
+    {
+      ...CLASSES.dark_knight.startingArmor,
+      name: 'Кожаный Доспех Лоренсии',
+      rarity: 'normal',
+      baseDefense: 12,
+    },
+    null
+  );
+  const dkBlackDragon = resolveArmorSetVisualStyle(
+    'dark_knight',
+    {
+      ...CLASSES.dark_knight.startingArmor,
+      name: 'Латы Чёрного Феникса',
+      rarity: 'excellent',
+      baseDefense: 55,
+    },
+    null
+  );
+  const dkTitan = resolveArmorSetVisualStyle(
+    'dark_knight',
+    {
+      ...CLASSES.dark_knight.startingArmor,
+      name: 'Anc. Доспех Великого Титана',
+      rarity: 'ancient',
+      baseDefense: 150,
+    },
+    null
+  );
+  assert.equal(dkLeather.tier, 1);
+  assert.equal(dkBlackDragon.tier, 3);
+  assert.equal(dkTitan.tier, 5);
+  assert.notEqual(dkLeather.styleId, dkBlackDragon.styleId);
+  assert.notEqual(dkBlackDragon.styleId, dkTitan.styleId);
+
+  // 4. Verify distinct weapon visual archetypes across classes and weapon families
+  assert.equal(
+    resolveWeaponVisualStyle('dark_knight', {
+      ...CLASSES.dark_knight.startingWeapon,
+      name: 'Короткий Меч Лоренсии',
+      rarity: 'normal',
+      baseAttack: 18,
+    }).archetype,
+    'dk_short_sword'
+  );
+  assert.equal(
+    resolveWeaponVisualStyle('dark_knight', {
+      ...CLASSES.dark_knight.startingWeapon,
+      name: 'Трезубец Атланса',
+      rarity: 'magic',
+      baseAttack: 64,
+    }).archetype,
+    'dk_atlans_trident'
+  );
+  assert.equal(
+    resolveWeaponVisualStyle('dark_knight', {
+      ...CLASSES.dark_knight.startingWeapon,
+      name: 'Коса Балрога',
+      rarity: 'excellent',
+      baseAttack: 85,
+    }).archetype,
+    'dk_balrog_scythe'
+  );
+  assert.equal(
+    resolveWeaponVisualStyle('dark_knight', {
+      ...CLASSES.dark_knight.startingWeapon,
+      name: 'Божественный Меч Архангела',
+      rarity: 'ancient',
+      baseAttack: 180,
+    }).archetype,
+    'dk_archangel_flameblade'
+  );
+  assert.equal(
+    resolveWeaponVisualStyle('fairy_elf', {
+      ...CLASSES.fairy_elf.startingWeapon,
+      name: 'Арбалет Святого Духа',
+      rarity: 'excellent',
+      baseAttack: 65,
+    }).archetype,
+    'elf_holy_crossbow'
+  );
+});
+
+test('Every differently named weapon, armor set, and helm across all 3 classes resolves to a unique visual style and Excellent (Exe) items enable soft emerald-green luminescence', async () => {
+  const { resolveArmorSetVisualStyle, resolveWeaponVisualStyle } = await import('./models');
+  const { CLASSES, getShopEquipmentCatalog } = await import('./rules');
+
+  const classWeaponNames = {
+    dark_knight: [
+      'Короткий Меч Лоренсии',
+      'Клинок Хаоса',
+      'Клинок Изумрудной Нории',
+      'Рунный Меч Эльбеланда',
+      'Ледяной Клинок Девиаса',
+      'Клинок Разрушения',
+      'Трезубец Атланса',
+      'Коса Балрога',
+      'Клинок Заикана Таркана',
+      'Меч Огненного Феникса',
+      'Клинок Бездны Калимы',
+      'Королевский Меч Лорена',
+      'Божественный Меч Архангела',
+    ],
+    dark_wizard: [
+      'Ученический Посох Лоренсии',
+      'Посох Легендарной Души',
+      'Посох Древней Нории',
+      'Жезл Иллюзий Эльбеланда',
+      'Ледяной Посох Девиаса',
+      'Посох Души Дракона',
+      'Посох Вод Атланса',
+      'Посох Пламени Балрога',
+      'Жезл Песков Таркана',
+      'Посох Небес Икаруса',
+      'Жезл Оракула Калимы',
+      'Скипетр Империи Кантуру',
+      'Посох Архангела Кундуна',
+    ],
+    fairy_elf: [
+      'Короткий Лук Лоренсии',
+      'Лук Серебряного Крыла',
+      'Лук Королевы Нории',
+      'Лук Ветров Эльбеланда',
+      'Хрустальный Лук Девиаса',
+      'Арбалет Святого Духа',
+      'Коралловый Лук Атланса',
+      'Лук Хаоса Башни',
+      'Лук Золотых Песков',
+      'Крылатый Лук Икаруса',
+      'Арбалет Кошмара Кантуру',
+      'Лук Ледяного Раклиона',
+      'Божественный Арбалет Архангела',
+    ],
+  } as const;
+
+  const classArmorNames = {
+    dark_knight: [
+      'Кожаный Доспех Лоренсии',
+      'Кираса Чёрного Дракона',
+      'Броня Стража Нории',
+      'Доспех Рыцаря Эльбеланда',
+      'Латы Северного Девиаса',
+      'Латы Чёрного Феникса',
+      'Чешуйчатый Доспех Атланса',
+      'Броня Повелителя Башни',
+      'Латы Пустынного Титана',
+      'Доспех Небесного Дракона',
+      'Броня Императора Кантуру',
+      'Кираса Вечного Льда',
+      'Доспех Великого Титана',
+    ],
+    dark_wizard: [
+      'Холщовая Мантия Лоренсии',
+      'Мантия Анубиса',
+      'Мантия Мудреца Нории',
+      'Роба Туманов Эльбеланда',
+      'Мантия Вьюги Девиаса',
+      'Мантия Легендарного Духа',
+      'Одеяние Бездны Атланса',
+      'Мантия Затмения Башни',
+      'Мантия Бури Таркана',
+      'Одеяние Звёздного Икаруса',
+      'Роба Реликвий Кантуру',
+      'Мантия Пентаграмм Ахерона',
+      'Мантия Вечности Кундуна',
+    ],
+    fairy_elf: [
+      'Лёгкая Туника Лоренсии',
+      'Доспех Стража Нории',
+      'Туника Луны Эльбеланда',
+      'Одеяние Снегов Девиаса',
+      'Одеяние Красного Духа',
+      'Латы Сирены Атланса',
+      'Доспех Валькирии Башни',
+      'Одеяние Оазиса Таркана',
+      'Крылатый Доспех Икаруса',
+      'Броня Стража Крайвульфа',
+      'Латы Хрустальной Никси',
+      'Божественные Латы Сильфиды',
+    ],
+  } as const;
+
+  const classHelmNames = {
+    dark_knight: [
+      'Кожаный Шлем Лоренсии',
+      'Шлем Чёрного Дракона',
+      'Шлем Стража Нории',
+      'Корона Эльбеланда',
+      'Шлем Льдов Девиаса',
+      'Шлем Чёрного Феникса',
+      'Шлем Глубин Атланса',
+      'Рогатый Шлем Балрога',
+      'Шлем Песчаной Бури',
+      'Корона Небесного Феникса',
+      'Шлем Титана Кантуру',
+      'Корона Фереи',
+      'Корона Великого Титана',
+    ],
+    dark_wizard: [
+      'Повязка Ученика Лоренсии',
+      'Венец Анубиса',
+      'Венец Нории',
+      'Диадема Эльбеланда',
+      'Корона Стужи Девиаса',
+      'Венец Легендарного Духа',
+      'Тиара Атланса',
+      'Корона Затмения',
+      'Венец Оракула Таркана',
+      'Диадема Икаруса',
+      'Венец Кошмара Кантуру',
+      'Корона Ахерона',
+      'Корона Вечности',
+    ],
+    fairy_elf: [
+      'Обруч Рощи Лоренсии',
+      'Диадема Стража Нории',
+      'Тиара Эльбеланда',
+      'Венец Льдов Девиаса',
+      'Тиара Красного Духа',
+      'Корона Сирены Атланса',
+      'Диадема Валькирии',
+      'Тиара Песков Таркана',
+      'Венец Облаков Икаруса',
+      'Корона Алтаря Волка',
+      'Диадема Озера Никси',
+      'Корона Сильфиды',
+    ],
+  } as const;
+
+  for (const classId of ['dark_knight', 'dark_wizard', 'fairy_elf'] as const) {
+    // 1. All 13 named weapons per class resolve to 13 unique archetypes/weaponIds
+    const seenWeapons = new Set<string>();
+    for (const wName of classWeaponNames[classId]) {
+      const style = resolveWeaponVisualStyle(classId, {
+        ...CLASSES[classId].startingWeapon,
+        name: wName,
+        rarity: 'normal',
+      });
+      assert.equal(
+        seenWeapons.has(style.weaponId),
+        false,
+        `Duplicate weaponId ${style.weaponId} for weapon "${wName}" (${classId})`
+      );
+      seenWeapons.add(style.weaponId);
+      assert.equal(style.hasExcellentGreenGlow, false);
+
+      // Excellent variant of the same weapon activates soft green glow while keeping its unique weaponId
+      const exeStyle = resolveWeaponVisualStyle(classId, {
+        ...CLASSES[classId].startingWeapon,
+        name: `Exc. ${wName}`,
+        rarity: 'excellent',
+      });
+      assert.equal(exeStyle.weaponId, style.weaponId);
+      assert.equal(exeStyle.hasExcellentGreenGlow, true);
+      assert.equal(exeStyle.excellentGlowColor, '#34d399');
+    }
+    assert.equal(seenWeapons.size, 13);
+
+    // 2. All named armors per class resolve to unique styleIds and chestMotifs
+    const seenArmors = new Set<string>();
+    for (const aName of classArmorNames[classId]) {
+      const style = resolveArmorSetVisualStyle(
+        classId,
+        {
+          ...CLASSES[classId].startingArmor,
+          name: aName,
+          rarity: 'normal',
+        },
+        null
+      );
+      assert.equal(
+        seenArmors.has(style.styleId),
+        false,
+        `Duplicate armor styleId ${style.styleId} for armor "${aName}" (${classId})`
+      );
+      seenArmors.add(style.styleId);
+      assert.equal(style.hasArmorExcellentGlow, false);
+      assert.equal(style.hasExcellentGreenGlow, false);
+
+      const exeArmorStyle = resolveArmorSetVisualStyle(
+        classId,
+        {
+          ...CLASSES[classId].startingArmor,
+          name: `Exc. ${aName}`,
+          rarity: 'excellent',
+        },
+        null
+      );
+      assert.equal(exeArmorStyle.styleId, style.styleId);
+      assert.equal(exeArmorStyle.hasArmorExcellentGlow, true);
+      assert.equal(exeArmorStyle.hasExcellentGreenGlow, true);
+      assert.equal(exeArmorStyle.excellentGlowColor, '#34d399');
+    }
+    assert.equal(seenArmors.size, classArmorNames[classId].length);
+
+    // 3. All named helms per class resolve to unique helmStyleIds and helmMotifs
+    const seenHelms = new Set<string>();
+    for (const hName of classHelmNames[classId]) {
+      const style = resolveArmorSetVisualStyle(classId, null, {
+        ...CLASSES[classId].startingHelm,
+        name: hName,
+        rarity: 'normal',
+      });
+      assert.equal(
+        seenHelms.has(style.helmStyleId),
+        false,
+        `Duplicate helmStyleId ${style.helmStyleId} for helm "${hName}" (${classId})`
+      );
+      seenHelms.add(style.helmStyleId);
+      assert.equal(style.hasHelmExcellentGlow, false);
+
+      const exeHelmStyle = resolveArmorSetVisualStyle(classId, null, {
+        ...CLASSES[classId].startingHelm,
+        name: `Exc. ${hName}`,
+        rarity: 'excellent',
+      });
+      assert.equal(exeHelmStyle.helmStyleId, style.helmStyleId);
+      assert.equal(exeHelmStyle.hasHelmExcellentGlow, true);
+      assert.equal(exeHelmStyle.hasExcellentGreenGlow, true);
+    }
+    assert.equal(seenHelms.size, classHelmNames[classId].length);
+
+    // 4. Shop catalog items for each class have unique names and distinct visual styles per slot
+    const catalog = getShopEquipmentCatalog(classId);
+    const catalogNames = catalog.map((c) => c.itemTemplate.name);
+    assert.equal(new Set(catalogNames).size, catalogNames.length);
+  }
+});
+
+test('Upgrade level (+1..+15) modifies item color and glow (+1..+6 blue-darkens, +6..+9 glows brightly in base primary color, +10..+15 adds subtle white sheen) and Ancient tier uses purple (#c084fc) with same glow as Excellent', async () => {
+  const {
+    resolveArmorSetVisualStyle,
+    resolveItemUpgradeColorEffect,
+    resolveWeaponVisualStyle,
+  } = await import('./models');
+  const { getEquipmentRarityColor } = await import('./party');
+  const { CLASSES } = await import('./rules');
+
+  // 1. Ancient tier is purple (#c084fc) in ground/rarity helpers and carries purple glow flags matching Excellent
+  assert.equal(getEquipmentRarityColor('ancient'), '#c084fc');
+  assert.equal(getEquipmentRarityColor('excellent'), '#34d399');
+
+  const ancSword = resolveWeaponVisualStyle('dark_knight', {
+    ...CLASSES.dark_knight.startingWeapon,
+    name: 'Anc. Клинок Разрушения',
+    rarity: 'ancient',
+    level: 0,
+  });
+  assert.equal(ancSword.hasAncientPurpleGlow, true);
+  assert.equal(ancSword.ancientGlowColor, '#c084fc');
+
+  const ancArmor = resolveArmorSetVisualStyle(
+    'dark_wizard',
+    {
+      ...CLASSES.dark_wizard.startingArmor,
+      name: 'Anc. Мантия Анубиса',
+      rarity: 'ancient',
+      level: 0,
+    },
+    null
+  );
+  assert.equal(ancArmor.hasArmorAncientGlow, true);
+  assert.equal(ancArmor.hasAncientPurpleGlow, true);
+  assert.equal(ancArmor.ancientGlowColor, '#c084fc');
+
+  // 2. +0 item keeps base primary color without blue-darkening, primary glow, or white sheen
+  const lvl0 = resolveItemUpgradeColorEffect(0, '#991b1b', '#1f090d');
+  assert.equal(lvl0.isBlueDarkened, false);
+  assert.equal(lvl0.hasBrightPrimaryGlow, false);
+  assert.equal(lvl0.hasSubtleWhiteSheen, false);
+  assert.equal(lvl0.tintedPrimaryColor, '#991b1b');
+
+  // 3. +1 to +6 items slightly shift darker & bluer
+  for (let lvl = 1; lvl <= 6; lvl++) {
+    const eff = resolveItemUpgradeColorEffect(lvl, '#991b1b', '#1f090d');
+    assert.equal(eff.isBlueDarkened, true, `Level +${lvl} should be blue-darkened`);
+    assert.ok(eff.blueDarkenFactor > 0);
+    assert.notEqual(eff.tintedPrimaryColor, '#991b1b');
+  }
+
+  // 4. +6 to +9 items glow brightly with their own base primary color (without white sheen yet)
+  for (let lvl = 6; lvl <= 9; lvl++) {
+    const eff = resolveItemUpgradeColorEffect(lvl, '#0284c7', '#0c4a6e');
+    assert.equal(eff.hasBrightPrimaryGlow, true, `Level +${lvl} should glow with primary color`);
+    assert.equal(eff.primaryGlowColor, '#0284c7');
+    assert.ok(eff.primaryGlowIntensity >= 0.6);
+    assert.equal(eff.hasSubtleWhiteSheen, false, `Level +${lvl} should not have +10..+15 white sheen`);
+  }
+
+  // 5. +10 to +15 items retain bright primary glow and add a subtle white sheen
+  for (let lvl = 10; lvl <= 15; lvl++) {
+    const eff = resolveItemUpgradeColorEffect(lvl, '#10b981', '#0f172a');
+    assert.equal(eff.isBlueDarkened, false);
+    assert.equal(eff.hasBrightPrimaryGlow, true);
+    assert.equal(eff.primaryGlowColor, '#10b981');
+    assert.equal(eff.hasSubtleWhiteSheen, true, `Level +${lvl} should have subtle white sheen`);
+    assert.ok(eff.whiteSheenAlpha >= 0.16 && eff.whiteSheenAlpha <= 0.35);
+  }
+});
+
+test('Grand Reset enforces progressive level requirements (300, 305, 310...), progressive Zen costs (100k, 150k, 200k...), and reduces required level for teleporting to each city by 5 per reset', async () => {
+  const {
+    canEnterTerritory,
+    getGrandResetRequirements,
+    getTerritoryEffectiveRequiredLevel,
+    performGrandReset,
+    TERRITORIES,
+  } = await import('./rules');
+
+  // 1. Progressive Grand Reset requirements:
+  // 1st reset (resets=0): Level 300, 100,000 Zen
+  // 2nd reset (resets=1): Level 305, 150,000 Zen
+  // 3rd reset (resets=2): Level 310, 200,000 Zen
+  // 4th reset (resets=3): Level 315, 250,000 Zen
+  const req1 = getGrandResetRequirements(0);
+  assert.equal(req1.nextResetNumber, 1);
+  assert.equal(req1.requiredLevel, 300);
+  assert.equal(req1.zenCost, 100_000);
+  assert.equal(req1.nextTerritoryLevelReduction, 5);
+
+  const req2 = getGrandResetRequirements(1);
+  assert.equal(req2.nextResetNumber, 2);
+  assert.equal(req2.requiredLevel, 305);
+  assert.equal(req2.zenCost, 150_000);
+  assert.equal(req2.nextTerritoryLevelReduction, 10);
+
+  const req3 = getGrandResetRequirements(2);
+  assert.equal(req3.nextResetNumber, 3);
+  assert.equal(req3.requiredLevel, 310);
+  assert.equal(req3.zenCost, 200_000);
+  assert.equal(req3.nextTerritoryLevelReduction, 15);
+
+  const req4 = getGrandResetRequirements(3);
+  assert.equal(req4.nextResetNumber, 4);
+  assert.equal(req4.requiredLevel, 315);
+  assert.equal(req4.zenCost, 250_000);
+  assert.equal(req4.nextTerritoryLevelReduction, 20);
+
+  // 2. Verify performGrandReset strictly validates progressive level and Zen cost at each reset step
+  const baseHero = createInitialPlayerState('dark_knight');
+
+  // Reset #1 fails at level 299 or with 99,999 Zen, succeeds at level 300 with 100,000 Zen
+  assert.equal(performGrandReset({ ...baseHero, level: 299, zen: 100_000 }).success, false);
+  assert.equal(performGrandReset({ ...baseHero, level: 300, zen: 99_999 }).success, false);
+  const reset1 = performGrandReset({ ...baseHero, level: 300, zen: 100_000 });
+  assert.equal(reset1.success, true);
+  assert.equal(reset1.nextState.resets, 1);
+  assert.equal(reset1.nextState.zen, 0);
+
+  // Reset #2 fails at level 300..304 or with 149,999 Zen, succeeds at level 305 with 150,000 Zen
+  assert.equal(performGrandReset({ ...reset1.nextState, level: 300, zen: 200_000 }).success, false);
+  assert.equal(performGrandReset({ ...reset1.nextState, level: 304, zen: 200_000 }).success, false);
+  assert.equal(performGrandReset({ ...reset1.nextState, level: 305, zen: 149_999 }).success, false);
+  const reset2 = performGrandReset({ ...reset1.nextState, level: 305, zen: 175_000 });
+  assert.equal(reset2.success, true);
+  assert.equal(reset2.nextState.resets, 2);
+  assert.equal(reset2.nextState.zen, 25_000);
+
+  // Reset #3 fails at level 309 or with 199,999 Zen, succeeds at level 310 with 200,000 Zen
+  assert.equal(performGrandReset({ ...reset2.nextState, level: 309, zen: 200_000 }).success, false);
+  assert.equal(performGrandReset({ ...reset2.nextState, level: 310, zen: 199_999 }).success, false);
+  const reset3 = performGrandReset({ ...reset2.nextState, level: 310, zen: 200_000 });
+  assert.equal(reset3.success, true);
+  assert.equal(reset3.nextState.resets, 3);
+  assert.equal(reset3.nextState.zen, 0);
+
+  // 3. Every Grand Reset reduces the required level for teleporting to each city by 5 levels (minimum level 1)
+  // Noria base recommendedLevel = 12:
+  // - 0 resets -> requires 12
+  // - 1 reset  -> requires 7
+  // - 2 resets -> requires 2
+  // - 3 resets -> requires 1 (clamped at 1)
+  assert.equal(getTerritoryEffectiveRequiredLevel(12, 0), 12);
+  assert.equal(getTerritoryEffectiveRequiredLevel(12, 1), 7);
+  assert.equal(getTerritoryEffectiveRequiredLevel(12, 2), 2);
+  assert.equal(getTerritoryEffectiveRequiredLevel(12, 3), 1);
+
+  assert.equal(canEnterTerritory(7, 'noria', 0).allowed, false);
+  assert.equal(canEnterTerritory(7, 'noria', 1).allowed, true);
+  assert.equal(canEnterTerritory(6, 'noria', 1).allowed, false);
+  assert.equal(canEnterTerritory(2, 'noria', 2).allowed, true);
+  assert.equal(canEnterTerritory(1, 'noria', 2).allowed, false);
+  assert.equal(canEnterTerritory(1, 'noria', 3).allowed, true);
+
+  // Verify every territory in TERRITORIES reduces its required level by 5 * resets (down to min 1)
+  for (const territory of TERRITORIES) {
+    for (const r of [0, 1, 2, 5, 10]) {
+      const expectedReq = Math.max(1, territory.recommendedLevel - r * 5);
+      const checkAtReq = canEnterTerritory(expectedReq, territory.id, r);
+      assert.equal(checkAtReq.allowed, true, `Should allow entering ${territory.id} at level ${expectedReq} with ${r} resets`);
+      assert.equal(checkAtReq.requiredLevel, expectedReq);
+      assert.equal(checkAtReq.baseRequiredLevel, territory.recommendedLevel);
+      if (expectedReq > 1) {
+        const checkBelowReq = canEnterTerritory(expectedReq - 1, territory.id, r);
+        assert.equal(checkBelowReq.allowed, false, `Should block entering ${territory.id} at level ${expectedReq - 1} with ${r} resets`);
+      }
+    }
+  }
+});
 
 
 

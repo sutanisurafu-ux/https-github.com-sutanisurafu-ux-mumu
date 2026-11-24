@@ -18,6 +18,7 @@ import {
   calculateTerritoryMonsterDefense,
   generateEquipmentDrop,
   getFirstProfQuestItemName,
+  getTerritoryEffectiveRequiredLevel,
   getTerritoryMapLayout,
   rollBloodCastleMaterialDrop,
   rollJewelDropType,
@@ -1115,7 +1116,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         const eq = generateEquipmentDrop(pState.classId, territoryIdx, isBoss);
         const eqColor =
           eq.rarity === 'ancient'
-            ? '#f59e0b'
+            ? '#c084fc'
             : eq.rarity === 'excellent'
               ? '#34d399'
               : eq.rarity === 'magic'
@@ -1227,7 +1228,13 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       const monsterDefense = activeInBloodCastle
         ? Math.round(calculateTerritoryMonsterDefense(territory.enemyLevelMultiplier) * 0.45)
         : calculateTerritoryMonsterDefense(territory.enemyLevelMultiplier);
-      const levelGap = activeInBloodCastle ? 0 : Math.max(0, territory.recommendedLevel - pState.level);
+      const effectiveTerritoryReqLvl = getTerritoryEffectiveRequiredLevel(
+        territory.recommendedLevel,
+        pState.resets
+      );
+      const levelGap = activeInBloodCastle
+        ? 0
+        : Math.max(0, effectiveTerritoryReqLvl - pState.level);
       const underLevelFactor = levelGap > 0 ? Math.max(0.42, 1 - levelGap * 0.015) : 1.0;
       const mitigatedRaw = Math.max(rawDamage * 0.16, rawDamage - monsterDefense) * underLevelFactor;
 
@@ -5139,6 +5146,35 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         ) {
           continue;
         }
+        const isExcellentDrop =
+          drop.type === 'equipment' && drop.equipment?.rarity === 'excellent';
+        const isAncientDrop =
+          drop.type === 'equipment' && drop.equipment?.rarity === 'ancient';
+        if (isExcellentDrop || isAncientDrop) {
+          const exePulse = 0.72 + Math.sin(now * 0.0065 + drop.x * 0.05) * 0.28;
+          const exeHalo = ctx.createRadialGradient(
+            drop.x,
+            drop.y,
+            2,
+            drop.x,
+            drop.y,
+            24 * exePulse
+          );
+          if (isAncientDrop) {
+            exeHalo.addColorStop(0, 'rgba(192, 132, 252, 0.5)');
+            exeHalo.addColorStop(0.55, 'rgba(168, 85, 247, 0.24)');
+            exeHalo.addColorStop(1, 'rgba(168, 85, 247, 0)');
+          } else {
+            exeHalo.addColorStop(0, 'rgba(52, 211, 153, 0.48)');
+            exeHalo.addColorStop(0.55, 'rgba(16, 185, 129, 0.22)');
+            exeHalo.addColorStop(1, 'rgba(16, 185, 129, 0)');
+          }
+          ctx.fillStyle = exeHalo;
+          ctx.beginPath();
+          ctx.arc(drop.x, drop.y, 24 * exePulse, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
         if (drop.type !== 'zen') {
           const grad = ctx.createLinearGradient(drop.x, drop.y, drop.x, drop.y - 74);
           grad.addColorStop(0, drop.rarityColor);
@@ -5169,6 +5205,13 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         ctx.fillStyle = 'rgba(9, 8, 12, 0.88)';
         const textW = ctx.measureText(displayLabel).width + 10;
         ctx.fillRect(drop.x - textW / 2, drop.y - 24, textW, 15);
+        if (isExcellentDrop || isAncientDrop) {
+          ctx.strokeStyle = isAncientDrop
+            ? 'rgba(192, 132, 252, 0.78)'
+            : 'rgba(52, 211, 153, 0.72)';
+          ctx.lineWidth = 1.1;
+          ctx.strokeRect(drop.x - textW / 2, drop.y - 24, textW, 15);
+        }
         ctx.fillStyle = drop.rarityColor;
         ctx.fillText(displayLabel, drop.x, drop.y - 13);
       }

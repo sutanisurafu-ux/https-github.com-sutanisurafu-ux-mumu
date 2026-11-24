@@ -1296,7 +1296,11 @@ export default function App() {
 
   const handleTeleportToAlly = useCallback((ally: PartyMemberState) => {
     const currentPlayer = playerStateRef.current;
-    const entryCheck = canEnterTerritory(currentPlayer.level, ally.territoryId);
+    const entryCheck = canEnterTerritory(
+      currentPlayer.level,
+      ally.territoryId,
+      currentPlayer.resets
+    );
     if (!ally.inBloodCastle && !entryCheck.allowed) {
       engineActionsRef.current?.notifyStatusMessage(
         `🔒 Для перехода в ${entryCheck.territory.name} нужен Ур. ${entryCheck.requiredLevel} (сейчас Ур. ${currentPlayer.level})!`,
@@ -2105,7 +2109,7 @@ export default function App() {
   };
 
   const handleSelectTerritory = (territoryId: TerritoryId) => {
-    const entryCheck = canEnterTerritory(player.level, territoryId);
+    const entryCheck = canEnterTerritory(player.level, territoryId, player.resets);
     if (!entryCheck.allowed) {
       engineActionsRef.current?.notifyStatusMessage(
         `🔒 Для перехода в ${entryCheck.territory.name} нужен Ур. ${entryCheck.requiredLevel} (сейчас Ур. ${player.level})!`,

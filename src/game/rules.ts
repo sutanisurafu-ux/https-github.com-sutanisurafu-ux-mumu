@@ -763,6 +763,42 @@ export function calculateItemEffectiveDefense(item: EquipmentItem | null): numbe
   return Math.round(item.baseDefense * rarityMult + (item.baseDefense > 0 ? upgradeBonus + lifeBonus : 0));
 }
 
+export interface WingUpgradeBonus {
+  level: number;
+  speedBonusPct: number;
+  speedMultiplier: number;
+  visualScaleMultiplier: number;
+  visualGrowthPct: number;
+}
+
+/**
+ * Calculates wing upgrade bonuses:
+ * - Each upgrade level (+1..+15) grants +1% additional speed to maximum movement speed.
+ * - Each upgrade level also increases the visual size/wingspan of the rendered wings.
+ */
+export function calculateWingUpgradeBonus(wings: EquipmentItem | null): WingUpgradeBonus {
+  if (!wings || wings.slot !== 'wings') {
+    return {
+      level: 0,
+      speedBonusPct: 0,
+      speedMultiplier: 1,
+      visualScaleMultiplier: 1,
+      visualGrowthPct: 0,
+    };
+  }
+  const eq = CHARACTER_SCALING.equipmentScaling;
+  const clampedLevel = Math.max(0, Math.min(15, Math.floor(wings.level ?? 0)));
+  const speedPctPerLevel = eq.wingSpeedPctPerLevel ?? 0.01;
+  const visualScalePerLevel = eq.wingVisualScalePerLevel ?? 0.024;
+  return {
+    level: clampedLevel,
+    speedBonusPct: Math.round(clampedLevel * speedPctPerLevel * 100),
+    speedMultiplier: 1 + clampedLevel * speedPctPerLevel,
+    visualScaleMultiplier: Number((1 + clampedLevel * visualScalePerLevel).toFixed(4)),
+    visualGrowthPct: Math.round(clampedLevel * visualScalePerLevel * 100),
+  };
+}
+
 export function calculateDerivedStats(state: PlayerProgressState): DerivedStats {
   const { attributes, level, equipped, classId, classTier, resets } = state;
   const cls = CLASSES[classId];
@@ -851,9 +887,15 @@ export function calculateDerivedStats(state: PlayerProgressState): DerivedStats 
       ? df.doubleDamageTwoSetPieces
       : df.doubleDamageBase;
 
-  const moveSpeed = Math.min(
+  const wingBonus = calculateWingUpgradeBonus(equipped.wings);
+  const baseCappedSpeed = Math.min(
     df.moveSpeedCap,
-    Math.round(df.moveSpeedBase + attributes.agi * df.moveSpeedPerAgi + equipSpeed)
+    df.moveSpeedBase + attributes.agi * df.moveSpeedPerAgi + equipSpeed
+  );
+  const effectiveMoveSpeedCap = Math.round(df.moveSpeedCap * wingBonus.speedMultiplier);
+  const moveSpeed = Math.min(
+    effectiveMoveSpeedCap,
+    Math.round(baseCappedSpeed * wingBonus.speedMultiplier)
   );
   const cpw = df.combatPowerWeights;
   const combatPower = Math.round(
@@ -935,6 +977,22 @@ export interface ShopEquipmentCatalogEntry {
 
 export function getShopEquipmentCatalog(classId: CharacterClassId): ShopEquipmentCatalogEntry[] {
   const cls = CLASSES[classId];
+  const starterWeaponNames: Record<CharacterClassId, string> = {
+    dark_knight: 'Короткий Меч Лоренсии',
+    dark_wizard: 'Ученический Посох Лоренсии',
+    fairy_elf: 'Короткий Лук Лоренсии',
+  };
+  const starterArmorNames: Record<CharacterClassId, string> = {
+    dark_knight: 'Кожаный Доспех Лоренсии',
+    dark_wizard: 'Холщовая Мантия Лоренсии',
+    fairy_elf: 'Лёгкая Туника Лоренсии',
+  };
+  const starterHelmNames: Record<CharacterClassId, string> = {
+    dark_knight: 'Кожаный Шлем Лоренсии',
+    dark_wizard: 'Повязка Ученика Лоренсии',
+    fairy_elf: 'Обруч Рощи Лоренсии',
+  };
+
   return [
     {
       catalogId: 'starter_weapon',
@@ -943,10 +1001,12 @@ export function getShopEquipmentCatalog(classId: CharacterClassId): ShopEquipmen
       itemTemplate: {
         ...cls.startingWeapon,
         id: `shop_wep_1_${classId}`,
+        name: starterWeaponNames[classId],
         rarity: 'normal',
         level: 0,
         lifeOption: 0,
         baseAttack: Math.max(14, cls.startingWeapon.baseAttack - 8),
+        setName: undefined,
         valueZen: 250,
       },
     },
@@ -957,10 +1017,12 @@ export function getShopEquipmentCatalog(classId: CharacterClassId): ShopEquipmen
       itemTemplate: {
         ...cls.startingArmor,
         id: `shop_arm_1_${classId}`,
+        name: starterArmorNames[classId],
         rarity: 'normal',
         level: 0,
         lifeOption: 0,
         baseDefense: Math.max(10, cls.startingArmor.baseDefense - 5),
+        setName: undefined,
         valueZen: 220,
       },
     },
@@ -971,10 +1033,12 @@ export function getShopEquipmentCatalog(classId: CharacterClassId): ShopEquipmen
       itemTemplate: {
         ...cls.startingHelm,
         id: `shop_hlm_1_${classId}`,
+        name: starterHelmNames[classId],
         rarity: 'normal',
         level: 0,
         lifeOption: 0,
         baseDefense: Math.max(7, cls.startingHelm.baseDefense - 3),
+        setName: undefined,
         valueZen: 180,
       },
     },
@@ -1553,14 +1617,60 @@ export function evolveCharacterClass(
   };
 }
 
+export function getTerritoryEffectiveRequiredLevel(
+  baseRecommendedLevel: number,
+  playerResets = 0
+): number {
+  const safeResets = Math.max(0, Math.floor(playerResets || 0));
+  const reduction =
+    safeResets * CHARACTER_SCALING.grandReset.territoryLevelReductionPerReset;
+  return Math.max(1, baseRecommendedLevel - reduction);
+}
+
+export function getGrandResetRequirements(currentResets = 0): {
+  nextResetNumber: number;
+  requiredLevel: number;
+  zenCost: number;
+  bonusStatPoints: number;
+  currentTerritoryLevelReduction: number;
+  nextTerritoryLevelReduction: number;
+} {
+  const gr = CHARACTER_SCALING.grandReset;
+  const safeResets = Math.max(0, Math.floor(currentResets || 0));
+  const nextResetNumber = safeResets + 1;
+  const requiredLevel = gr.requiredLevel + safeResets * gr.extraRequiredLevelPerReset;
+  const zenCost = gr.baseZenCost + safeResets * gr.extraZenCostPerReset;
+  const bonusStatPoints = nextResetNumber * gr.bonusStatPoints;
+  return {
+    nextResetNumber,
+    requiredLevel,
+    zenCost,
+    bonusStatPoints,
+    currentTerritoryLevelReduction: safeResets * gr.territoryLevelReductionPerReset,
+    nextTerritoryLevelReduction: nextResetNumber * gr.territoryLevelReductionPerReset,
+  };
+}
+
 export function canEnterTerritory(
   playerLevel: number,
-  territoryId: TerritoryId
-): { allowed: boolean; requiredLevel: number; territory: TerritoryDefinition } {
+  territoryId: TerritoryId,
+  playerResets = 0
+): {
+  allowed: boolean;
+  requiredLevel: number;
+  baseRequiredLevel: number;
+  levelReduction: number;
+  territory: TerritoryDefinition;
+} {
   const territory = TERRITORIES.find((t) => t.id === territoryId) ?? TERRITORIES[0];
+  const baseRequiredLevel = territory.recommendedLevel;
+  const requiredLevel = getTerritoryEffectiveRequiredLevel(baseRequiredLevel, playerResets);
+  const levelReduction = Math.max(0, baseRequiredLevel - requiredLevel);
   return {
-    allowed: playerLevel >= territory.recommendedLevel,
-    requiredLevel: territory.recommendedLevel,
+    allowed: playerLevel >= requiredLevel,
+    requiredLevel,
+    baseRequiredLevel,
+    levelReduction,
     territory,
   };
 }
@@ -1569,21 +1679,33 @@ export function performGrandReset(
   state: PlayerProgressState
 ): { nextState: PlayerProgressState; success: boolean; message: string } {
   const gr = CHARACTER_SCALING.grandReset;
-  if (state.level < gr.requiredLevel) {
+  const req = getGrandResetRequirements(state.resets);
+
+  if (state.level < req.requiredLevel) {
     return {
       nextState: state,
       success: false,
-      message: `Гранд Ресет доступен с ${gr.requiredLevel}-го уровня (сейчас Ур. ${state.level}/${gr.requiredLevel}).`,
+      message: `Гранд Ресет #${req.nextResetNumber} доступен с ${req.requiredLevel}-го уровня (сейчас Ур. ${state.level}/${req.requiredLevel}).`,
     };
   }
-  const nextResets = state.resets + 1;
+
+  if (state.zen < req.zenCost) {
+    return {
+      nextState: state,
+      success: false,
+      message: `Для Гранд Ресета #${req.nextResetNumber} требуется ${req.zenCost.toLocaleString('ru-RU')} Zen (сейчас ${state.zen.toLocaleString('ru-RU')} Zen).`,
+    };
+  }
+
+  const nextResets = req.nextResetNumber;
   const cls = CLASSES[state.classId];
-  const resetStatPoints = nextResets * gr.bonusStatPoints;
+  const resetStatPoints = req.bonusStatPoints;
 
   return {
     nextState: {
       ...state,
       resets: nextResets,
+      zen: state.zen - req.zenCost,
       level: 1,
       exp: 0,
       expToNext: calculateExpToNextLevel(1),
@@ -1595,7 +1717,7 @@ export function performGrandReset(
       highestReachedTerritoryIdx: 0,
     },
     success: true,
-    message: `Гранд Ресет #${nextResets} выполнен! Все вкачанные статы сожжены до базы, герой возвращён в Лоренсию (Ур. 1) и получил ${resetStatPoints} очков прокачки (${nextResets} × ${gr.bonusStatPoints})!`,
+    message: `Гранд Ресет #${nextResets} выполнен за ${req.zenCost.toLocaleString('ru-RU')} Zen! Статы сожжены до базы, герой в Лоренсии (Ур. 1), получено ${resetStatPoints} очков (${nextResets}×${gr.bonusStatPoints}) и −${req.nextTerritoryLevelReduction} ур. к телепорту в города!`,
   };
 }
 
@@ -2282,7 +2404,7 @@ export function generateMonsterGroundDrops(params: {
     const eq = generateEquipmentDrop(params.classId, territoryIdx, params.isBoss);
     const eqColor =
       eq.rarity === 'ancient'
-        ? '#f59e0b'
+        ? '#c084fc'
         : eq.rarity === 'excellent'
           ? '#34d399'
           : eq.rarity === 'magic'
