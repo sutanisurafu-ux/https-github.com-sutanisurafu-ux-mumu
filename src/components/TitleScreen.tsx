@@ -8,6 +8,7 @@ import {
 } from '../game/rules';
 import { AccountCharacterRecord, CharacterClassId, ClassTier, TerritoryId } from '../game/types';
 import { HeroModelPreview } from './HeroModelPreview';
+import { ServerOnlineWidget } from './ServerOnlineWidget';
 
 interface LeaderboardEntry {
   id: string;
@@ -341,17 +342,20 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
               </button>
             </div>
 
-            {activeSection === 'leaders' && (
-              <button
-                type="button"
-                data-testid="leaders-refresh-button"
-                onClick={() => void loadLeaderboard()}
-                disabled={loadingLeaders}
-                className="gothic-button min-h-[34px] rounded-xl px-3 py-1 text-xs font-semibold text-amber-200 disabled:opacity-50 cursor-pointer"
-              >
-                {loadingLeaders ? 'Обновление...' : '↻ Обновить'}
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {activeSection === 'leaders' && (
+                <button
+                  type="button"
+                  data-testid="leaders-refresh-button"
+                  onClick={() => void loadLeaderboard()}
+                  disabled={loadingLeaders}
+                  className="gothic-button min-h-[38px] rounded-xl px-3 py-1 text-xs font-semibold text-amber-200 disabled:opacity-50 cursor-pointer"
+                >
+                  {loadingLeaders ? 'Обновление...' : '↻ Обновить'}
+                </button>
+              )}
+              <ServerOnlineWidget variant="lobby" />
+            </div>
           </div>
 
           {activeSection === 'leaders' ? (

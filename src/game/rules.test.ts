@@ -122,11 +122,18 @@ test('1st profession evolution requires Level 50 AND dropped Quest Item, and Gra
   const earlyReset = performGrandReset({ ...evo.nextState, level: 299 });
   assert.equal(earlyReset.success, false);
 
-  const validReset = performGrandReset({ ...evo.nextState, level: 300 });
+  const validReset = performGrandReset({
+    ...evo.nextState,
+    level: 300,
+    attributes: { str: 250, agi: 320, vit: 180, ene: 90 },
+    statPoints: 45,
+  });
   assert.equal(validReset.success, true);
   assert.equal(validReset.nextState.resets, 1);
   assert.equal(validReset.nextState.level, 1);
-  assert.equal(validReset.nextState.statPoints, evo.nextState.statPoints + 150);
+  // All allocated & unspent points are burned back to base class attributes and replaced with 1 * 350 = 350 points
+  assert.deepEqual(validReset.nextState.attributes, CLASSES.fairy_elf.baseAttributes);
+  assert.equal(validReset.nextState.statPoints, 350);
 });
 
 test('buyPotionsWithZen purchases HP and MP potion packs for Zen and rejects when Zen is insufficient', () => {
@@ -310,7 +317,7 @@ test('Bosses drop Jewel of Chaos with 20% chance in ANY territory while regular 
     );
   }
 
-  // Verify Grand Reset provides strong multiplicative combat power motivation (+45% attack/defense + 150 stat points per Reset)
+  // Verify Grand Reset burns old allocated points, grants 350 points on Reset #1, and still boosts power strongly
   const lvl300Hero = {
     ...createInitialPlayerState('dark_knight'),
     level: 300,
@@ -319,9 +326,19 @@ test('Bosses drop Jewel of Chaos with 20% chance in ANY territory while regular 
   const beforeResetStats = calculateDerivedStats(lvl300Hero);
   const afterReset = performGrandReset(lvl300Hero);
   assert.equal(afterReset.success, true);
-  const afterResetStats = calculateDerivedStats(afterReset.nextState);
-  assert.ok(afterResetStats.maxDamage > beforeResetStats.maxDamage * 1.4);
-  assert.ok(afterResetStats.defense > beforeResetStats.defense * 1.4);
+  assert.deepEqual(afterReset.nextState.attributes, CLASSES.dark_knight.baseAttributes);
+  assert.equal(afterReset.nextState.statPoints, 350);
+  const afterAllocResetStats = calculateDerivedStats({
+    ...afterReset.nextState,
+    attributes: {
+      ...afterReset.nextState.attributes,
+      str: afterReset.nextState.attributes.str + 250,
+      agi: afterReset.nextState.attributes.agi + 100,
+    },
+    statPoints: 0,
+  });
+  assert.ok(afterAllocResetStats.maxDamage > beforeResetStats.maxDamage * 1.25);
+  assert.ok(afterAllocResetStats.defense > beforeResetStats.defense * 1.25);
 });
 
 test('Blood Castle Ticket crafting uses 1 Blood Scroll + 1 Blood Fang + 1 Jewel of Chaos with 80% success rate, and quest completion awards +3 Jewel of Chaos and EXP', async () => {
@@ -1826,5 +1843,87 @@ test('Single-session deduplication evicts duplicate account/character/browser ta
   const noSelfEvict = findDuplicateSessionClientIds(activeSessions, activeSessions[0]);
   assert.deepEqual(noSelfEvict, []);
 });
+
+test('Grand Reset burns all previous allocated & unspent points and awards 350 * resetNumber points (1->350, 2->700, 3->1050)', async () => {
+  const { performGrandReset, allocateStatPoint } = await import('./rules');
+  const { CHARACTER_SCALING } = await import('../config/characterScaling');
+
+  assert.equal(CHARACTER_SCALING.grandReset.bonusStatPoints, 350);
+
+  // Start as Dark Wizard, allocate heavy stats and reach level 300 with leftover points
+  let hero = {
+    ...createInitialPlayerState('dark_wizard'),
+    level: 300,
+    attributes: { str: 120, agi: 240, vit: 310, ene: 780 },
+    statPoints: 99,
+  };
+
+  // Reset #1 -> all allocated stats burned to baseAttributes, statPoints strictly 350
+  const r1 = performGrandReset(hero);
+  assert.equal(r1.success, true);
+  assert.equal(r1.nextState.resets, 1);
+  assert.equal(r1.nextState.level, 1);
+  assert.deepEqual(r1.nextState.attributes, CLASSES.dark_wizard.baseAttributes);
+  assert.equal(r1.nextState.statPoints, 350);
+
+  // Spend all 350 points + level back to 300 with even more allocated stats
+  hero = allocateStatPoint(r1.nextState, 'ene', 350);
+  assert.equal(hero.statPoints, 0);
+  assert.equal(hero.attributes.ene, CLASSES.dark_wizard.baseAttributes.ene + 350);
+  hero = {
+    ...hero,
+    level: 300,
+    attributes: { str: 50, agi: 400, vit: 500, ene: 1200 },
+    statPoints: 120,
+  };
+
+  // Reset #2 -> all previous points burned to baseAttributes, statPoints strictly 700
+  const r2 = performGrandReset(hero);
+  assert.equal(r2.success, true);
+  assert.equal(r2.nextState.resets, 2);
+  assert.deepEqual(r2.nextState.attributes, CLASSES.dark_wizard.baseAttributes);
+  assert.equal(r2.nextState.statPoints, 700);
+
+  // Reset #3 -> all previous points burned to baseAttributes, statPoints strictly 1050
+  const r3 = performGrandReset({
+    ...r2.nextState,
+    level: 300,
+    attributes: { str: 300, agi: 600, vit: 400, ene: 1500 },
+    statPoints: 50,
+  });
+  assert.equal(r3.success, true);
+  assert.equal(r3.nextState.resets, 3);
+  assert.deepEqual(r3.nextState.attributes, CLASSES.dark_wizard.baseAttributes);
+  assert.equal(r3.nextState.statPoints, 1050);
+});
+
+test('extractServerOnlinePlayers returns exact online count and strictly nicknames with online status sorted across all rooms', async () => {
+  const { extractServerOnlinePlayers } = await import('./party');
+
+  const empty = extractServerOnlinePlayers([]);
+  assert.equal(empty.count, 0);
+  assert.deepEqual(empty.players, []);
+
+  const summary = extractServerOnlinePlayers([
+    {
+      members: [{ nickname: 'Богдан' }, { nickname: 'Артур' }],
+    },
+    {
+      members: [{ nickname: 'Воин-777' }],
+    },
+  ]);
+
+  assert.equal(summary.count, 3);
+  assert.deepEqual(summary.players, [
+    { nickname: 'Артур', status: 'online' },
+    { nickname: 'Богдан', status: 'online' },
+    { nickname: 'Воин-777', status: 'online' },
+  ]);
+  // Ensure no extra fields leak beyond nickname and status
+  for (const p of summary.players) {
+    assert.deepEqual(Object.keys(p).sort(), ['nickname', 'status']);
+  }
+});
+
 
 

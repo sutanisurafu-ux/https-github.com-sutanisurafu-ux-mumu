@@ -1576,21 +1576,26 @@ export function performGrandReset(
       message: `Гранд Ресет доступен с ${gr.requiredLevel}-го уровня (сейчас Ур. ${state.level}/${gr.requiredLevel}).`,
     };
   }
+  const nextResets = state.resets + 1;
+  const cls = CLASSES[state.classId];
+  const resetStatPoints = nextResets * gr.bonusStatPoints;
+
   return {
     nextState: {
       ...state,
-      resets: state.resets + 1,
+      resets: nextResets,
       level: 1,
       exp: 0,
       expToNext: calculateExpToNextLevel(1),
-      statPoints: state.statPoints + gr.bonusStatPoints,
+      attributes: { ...cls.baseAttributes },
+      statPoints: resetStatPoints,
       territoryId: 'lorencia',
       inBloodCastle: false,
       killsInTerritory: 0,
       highestReachedTerritoryIdx: 0,
     },
     success: true,
-    message: `Гранд Ресет #${state.resets + 1} выполнен! Уровень сброшен до 1, герой перемещён в Лоренсию, все статы сохранены + ${gr.bonusStatPoints} бонусных очков!`,
+    message: `Гранд Ресет #${nextResets} выполнен! Все вкачанные статы сожжены до базы, герой возвращён в Лоренсию (Ур. 1) и получил ${resetStatPoints} очков прокачки (${nextResets} × ${gr.bonusStatPoints})!`,
   };
 }
 

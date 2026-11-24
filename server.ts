@@ -20,6 +20,7 @@ import {
   clampCoord,
   clampPositiveInt,
   electZoneHostId,
+  extractServerOnlinePlayers,
   findDuplicateSessionClientIds,
   getEligiblePartyExpRecipients,
   getPartyZoneKey,
@@ -1015,6 +1016,19 @@ async function startServer() {
     res.json({
       ok: true,
       trades: gameDb.listRecentTrades(limit),
+    });
+  });
+
+  // Minimalist Server Online Players endpoint (strictly count + character nicknames with online status)
+  app.get('/api/server/online', (_req, res) => {
+    const roomSnapshots = Array.from(rooms.values()).map((r) => ({
+      members: r.members.values(),
+    }));
+    const summary = extractServerOnlinePlayers(roomSnapshots);
+    res.json({
+      ok: true,
+      count: summary.count,
+      players: summary.players,
     });
   });
 

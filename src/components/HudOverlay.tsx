@@ -30,6 +30,7 @@ import {
   PartyMemberState,
   PlayerProgressState,
 } from '../game/types';
+import { ServerOnlineWidget } from './ServerOnlineWidget';
 
 function formatWorldClock(): string {
   const sec = Math.floor(getWorldGameTimeSec());
@@ -577,6 +578,9 @@ export const HudOverlay: React.FC<HudOverlayProps> = ({
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
           </div>
+
+          {/* Server Online Counter with Expandable Character Nicknames List */}
+          <ServerOnlineWidget variant="hud" syncTrigger={partyMembers.length} />
 
           {/* Compact Corner Minimap */}
           <div className="mu-minimap-compact hidden sm:block bg-[#0b090c]/88 border border-[#6e5a3e]/65 p-1 shadow-lg">

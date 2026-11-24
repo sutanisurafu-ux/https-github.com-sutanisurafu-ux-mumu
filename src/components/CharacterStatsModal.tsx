@@ -216,13 +216,14 @@ export const CharacterStatsModal: React.FC<CharacterStatsModalProps> = ({
                 type="button"
                 onClick={() => setStatusBanner(onGrandReset())}
                 className="gothic-button min-h-[36px] rounded-xl px-2.5 py-1 text-[11px] font-semibold text-sky-200 cursor-pointer whitespace-nowrap"
-                title="Гранд Ресет с 300 ур.: сохраняет все статы, даёт +150 бонусных очков и умножает АТК/ЗАЩ на +45% за каждый Ресет"
+                title={`Гранд Ресет с 300 ур.: сжигает все вкачанные очки до базовых статов, выдаёт ${(player.resets + 1) * 350} очк. (${player.resets + 1}×350) и умножает АТК/ЗАЩ на +45% за каждый Ресет`}
               >
-                Ресет ({player.level}/300) · ×{(1 + player.resets * 0.45).toFixed(2)}
+                Ресет ({player.level}/300) · +{(player.resets + 1) * 350} очк.
               </button>
             </div>
             <p className="text-[10px] leading-snug text-sky-300/90 font-mono-num">
-              Гранд Ресет (300 Ур.): сохраняет статы, даёт +150 очков и +45% ко всей АТК/ЗАЩ (обязателен для локаций 150+ ур.)
+              Гранд Ресет (300 Ур.): сжигает все вкачанные очки до базы и даёт{' '}
+              {(player.resets + 1) * 350} очк. ({player.resets + 1}×350; 1 ресет — 350, 2 — 700, 3 — 1050) +45% к АТК/ЗАЩ
             </p>
           </div>
         </div>

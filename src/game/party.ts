@@ -911,6 +911,33 @@ export function findDuplicateSessionClientIds(
   return duplicates;
 }
 
+export interface ServerOnlinePlayerEntry {
+  nickname: string;
+  status: 'online';
+}
+
+/**
+ * Extracts a clean, sorted list of currently online characters across all server rooms,
+ * containing strictly their nicknames and `'online'` status (no levels/maps/telemetry).
+ */
+export function extractServerOnlinePlayers(
+  activeRooms: Iterable<{ members: Iterable<Pick<PartyMemberState, 'nickname'>> }>
+): { count: number; players: ServerOnlinePlayerEntry[] } {
+  const players: ServerOnlinePlayerEntry[] = [];
+  for (const room of activeRooms) {
+    for (const member of room.members) {
+      const nick = sanitizePlayerNickname(member.nickname, 'Герой-MU');
+      players.push({ nickname: nick, status: 'online' });
+    }
+  }
+  players.sort((a, b) => a.nickname.localeCompare(b.nickname, 'ru', { sensitivity: 'base' }));
+  return {
+    count: players.length,
+    players,
+  };
+}
+
+
 
 
 
