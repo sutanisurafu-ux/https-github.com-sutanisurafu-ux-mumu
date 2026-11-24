@@ -853,5 +853,64 @@ export function applyCompletedTradeToPlayer(
   };
 }
 
+/**
+ * Custom WebSocket close code sent when a player's active world session is superseded
+ * by a newer tab/window for the same account, character, or browser session.
+ */
+export const WS_CLOSE_SESSION_REPLACED = 4001;
+
+export function sanitizeClientSessionKey(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!/^[a-zA-Z0-9_-]{8,64}$/.test(trimmed)) return null;
+  return trimmed;
+}
+
+export interface SessionIdentityDescriptor {
+  id: string;
+  accountId: string | null;
+  characterId: string | null;
+  clientSessionKey: string | null;
+}
+
+/**
+ * Identifies all existing live WebSocket client IDs that belong to the same player
+ * (matching characterId, accountId, or browser clientSessionKey) so the server can
+ * strictly enforce a single active player instance across all rooms and tabs.
+ */
+export function findDuplicateSessionClientIds(
+  existingSessions: Iterable<SessionIdentityDescriptor>,
+  incoming: SessionIdentityDescriptor
+): string[] {
+  const duplicates: string[] = [];
+  const seen = new Set<string>();
+
+  for (const existing of existingSessions) {
+    if (!existing.id || existing.id === incoming.id || seen.has(existing.id)) {
+      continue;
+    }
+    const sameCharacter =
+      incoming.characterId !== null &&
+      existing.characterId !== null &&
+      existing.characterId === incoming.characterId;
+    const sameAccount =
+      incoming.accountId !== null &&
+      existing.accountId !== null &&
+      existing.accountId === incoming.accountId;
+    const sameBrowserSession =
+      incoming.clientSessionKey !== null &&
+      existing.clientSessionKey !== null &&
+      existing.clientSessionKey === incoming.clientSessionKey;
+
+    if (sameCharacter || sameAccount || sameBrowserSession) {
+      seen.add(existing.id);
+      duplicates.push(existing.id);
+    }
+  }
+
+  return duplicates;
+}
+
+
 
 

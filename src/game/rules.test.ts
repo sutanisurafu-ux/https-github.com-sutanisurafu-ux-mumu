@@ -1743,3 +1743,88 @@ test('Manual party rules: no auto-party, 125m EXP sharing & proximity audio boun
   }
 });
 
+test('Single-session deduplication evicts duplicate account/character/browser tabs while allowing distinct players', async () => {
+  const {
+    WS_CLOSE_SESSION_REPLACED,
+    findDuplicateSessionClientIds,
+    sanitizeClientSessionKey,
+  } = await import('./party');
+
+  assert.equal(WS_CLOSE_SESSION_REPLACED, 4001);
+  assert.equal(sanitizeClientSessionKey('cs_abc123_xyz789'), 'cs_abc123_xyz789');
+  assert.equal(sanitizeClientSessionKey('short'), null);
+  assert.equal(sanitizeClientSessionKey('<script>alert(1)</script>'), null);
+  assert.equal(sanitizeClientSessionKey(null), null);
+
+  const activeSessions = [
+    {
+      id: 'hero_tab1',
+      accountId: 'acc_player_1',
+      characterId: 'char_knight_1',
+      clientSessionKey: 'cs_browser_A_001',
+    },
+    {
+      id: 'hero_other_player',
+      accountId: 'acc_player_2',
+      characterId: 'char_elf_2',
+      clientSessionKey: 'cs_browser_B_002',
+    },
+    {
+      id: 'hero_cookieless_tab1',
+      accountId: null,
+      characterId: null,
+      clientSessionKey: 'cs_browser_C_003',
+    },
+  ];
+
+  // 1. Opening a second tab in the same browser (same accountId + same browser session) evicts tab 1, NOT other players
+  const dupByAccount = findDuplicateSessionClientIds(activeSessions, {
+    id: 'hero_tab2',
+    accountId: 'acc_player_1',
+    characterId: 'char_knight_1',
+    clientSessionKey: 'cs_browser_A_001',
+  });
+  assert.deepEqual(dupByAccount, ['hero_tab1']);
+
+  // 2. Logging into a different character on the same account from another device still evicts the account's active tab
+  const dupSameAccountDiffChar = findDuplicateSessionClientIds(activeSessions, {
+    id: 'hero_mobile_tab',
+    accountId: 'acc_player_1',
+    characterId: 'char_wizard_99',
+    clientSessionKey: 'cs_mobile_D_004',
+  });
+  assert.deepEqual(dupSameAccountDiffChar, ['hero_tab1']);
+
+  // 3. Same characterId (even if accountId is absent) evicts the old character instance
+  const dupByCharOnly = findDuplicateSessionClientIds(activeSessions, {
+    id: 'hero_char_dup',
+    accountId: null,
+    characterId: 'char_elf_2',
+    clientSessionKey: null,
+  });
+  assert.deepEqual(dupByCharOnly, ['hero_other_player']);
+
+  // 4. Cookie-less fallback (e.g. strict iframe) matches by browser clientSessionKey
+  const dupByBrowserKey = findDuplicateSessionClientIds(activeSessions, {
+    id: 'hero_cookieless_tab2',
+    accountId: null,
+    characterId: null,
+    clientSessionKey: 'cs_browser_C_003',
+  });
+  assert.deepEqual(dupByBrowserKey, ['hero_cookieless_tab1']);
+
+  // 5. Completely distinct player (different account, character, and browser key) evicts nobody
+  const noDupDistinctPlayer = findDuplicateSessionClientIds(activeSessions, {
+    id: 'hero_player_3',
+    accountId: 'acc_player_3',
+    characterId: 'char_wizard_3',
+    clientSessionKey: 'cs_browser_E_005',
+  });
+  assert.deepEqual(noDupDistinctPlayer, []);
+
+  // 6. Re-joining on the exact same socket id never evicts itself
+  const noSelfEvict = findDuplicateSessionClientIds(activeSessions, activeSessions[0]);
+  assert.deepEqual(noSelfEvict, []);
+});
+
+

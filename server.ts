@@ -16,9 +16,11 @@ import {
   MAX_PARTY_SIZE,
   MAX_WORLD_PLAYERS,
   PARTY_EXP_RANGE_METERS,
+  WS_CLOSE_SESSION_REPLACED,
   clampCoord,
   clampPositiveInt,
   electZoneHostId,
+  findDuplicateSessionClientIds,
   getEligiblePartyExpRecipients,
   getPartyZoneKey,
   getWorldGameTimeSec,
@@ -27,6 +29,7 @@ import {
   sanitizeBloodCastleStage,
   sanitizeClassId,
   sanitizeClassTier,
+  sanitizeClientSessionKey,
   sanitizeDeadMonsterRespawns,
   sanitizeEnemyId,
   sanitizeGroundLootDrop,
@@ -81,6 +84,8 @@ interface ClientConnection {
   roomCode: string;
   accountId: string | null;
   characterId: string | null;
+  clientSessionKey: string | null;
+  replacedByNewSession: boolean;
   isAlive: boolean;
   msgCountWindow: number;
   windowResetAt: number;
@@ -575,7 +580,9 @@ function removeMemberFromFormedParty(
 
 function removeClientFromCurrentRoom(client: ClientConnection): void {
   if (!client.roomCode) return;
-  const room = rooms.get(client.roomCode);
+  const prevRoomCode = client.roomCode;
+  client.roomCode = '';
+  const room = rooms.get(prevRoomCode);
   if (!room) return;
 
   persistClientRuntimeVitals(client, room);
@@ -610,6 +617,44 @@ function removeClientFromCurrentRoom(client: ClientConnection): void {
     }
     rooms.delete(room.code);
   }
+}
+
+/**
+ * Authoritatively guarantees at most ONE active live player instance per account,
+ * character, or browser session across all server rooms. Any superseded older tab/socket
+ * is cleanly persisted, removed from its room/party/trade, notified via
+ * `party:session_replaced`, and closed with WS_CLOSE_SESSION_REPLACED (4001).
+ */
+function evictDuplicateSessions(incoming: ClientConnection): number {
+  const allConnections = new Map<string, ClientConnection>();
+  for (const room of rooms.values()) {
+    for (const [connId, conn] of room.connections.entries()) {
+      allConnections.set(connId, conn);
+    }
+  }
+
+  const duplicateIds = findDuplicateSessionClientIds(allConnections.values(), {
+    id: incoming.id,
+    accountId: incoming.accountId,
+    characterId: incoming.characterId,
+    clientSessionKey: incoming.clientSessionKey,
+  });
+
+  for (const dupId of duplicateIds) {
+    const dupConn = allConnections.get(dupId);
+    if (!dupConn) continue;
+    dupConn.replacedByNewSession = true;
+    removeClientFromCurrentRoom(dupConn);
+    sendJson(dupConn.ws, {
+      type: 'party:session_replaced',
+      reason: 'Ваш персонаж или аккаунт уже открыт в другой вкладке или окне.',
+    });
+    if (dupConn.ws.readyState === WebSocket.OPEN || dupConn.ws.readyState === WebSocket.CONNECTING) {
+      dupConn.ws.close(WS_CLOSE_SESSION_REPLACED, 'session_replaced');
+    }
+  }
+
+  return duplicateIds.length;
 }
 
 const SESSION_COOKIE_NAME = 'mu_session';
@@ -1029,6 +1074,8 @@ async function startServer() {
       roomCode: '',
       accountId,
       characterId: null,
+      clientSessionKey: null,
+      replacedByNewSession: false,
       isAlive: true,
       msgCountWindow: 0,
       windowResetAt: Date.now() + 1000,
@@ -1039,6 +1086,7 @@ async function startServer() {
     });
 
     ws.on('message', (rawBuffer) => {
+      if (client.replacedByNewSession) return;
       const now = Date.now();
       if (now > client.windowResetAt) {
         client.msgCountWindow = 0;
@@ -1058,9 +1106,20 @@ async function startServer() {
 
       if (!msg || typeof msg.type !== 'string') return;
 
+      if (msg.type === 'party:leave_world') {
+        removeClientFromCurrentRoom(client);
+        client.characterId = null;
+        sendJson(ws, { type: 'party:left_world' });
+        return;
+      }
+
       if (msg.type === 'party:join') {
         const requestedCode = sanitizePartyCode(msg.roomCode);
         let nickname = sanitizePlayerNickname(msg.nickname, `Рыцарь-${clientId.slice(-3).toUpperCase()}`);
+        const incomingSessionKey = sanitizeClientSessionKey(msg.clientSessionKey);
+        if (incomingSessionKey) {
+          client.clientSessionKey = incomingSessionKey;
+        }
 
         // Bind authenticated account character to this live WebSocket connection so HP & coords persist on server
         if (typeof msg.characterId === 'string' && client.accountId) {
@@ -1070,6 +1129,9 @@ async function startServer() {
             nickname = ownedChar.record.nickname;
           }
         }
+
+        // Enforce strictly one live server instance per account / character / browser session
+        evictDuplicateSessions(client);
 
         let targetCode = requestedCode;
         const candidateRoom = getOrCreateRoom(targetCode);

@@ -10,6 +10,7 @@ import { MobileControls } from './components/MobileControls';
 import { MobileOrientationGuard } from './components/MobileOrientationGuard';
 import { PartyCoopModal } from './components/PartyCoopModal';
 import { PlayerTradeModal } from './components/PlayerTradeModal';
+import { SessionReplacedModal } from './components/SessionReplacedModal';
 import { StatusModal } from './components/StatusModal';
 import { TerritoryModal } from './components/TerritoryModal';
 import { TitleScreen } from './components/TitleScreen';
@@ -19,6 +20,7 @@ import { detectTouchDevice, requestMobileLandscapeFullscreen } from './utils/mob
 import {
   DEFAULT_PARTY_ROOM,
   PARTY_EXP_RANGE_METERS,
+  WS_CLOSE_SESSION_REPLACED,
   applyCompletedTradeToPlayer,
   calculatePartyCoopExpBonus,
   getEligiblePartyExpRecipients,
@@ -83,6 +85,25 @@ import {
 
 type ActiveDrawer = 'none' | 'chaos_machine' | 'territory' | 'party';
 
+const BROWSER_SESSION_STORAGE_KEY = 'mu_client_session_key_v1';
+
+function getOrCreateBrowserSessionKey(): string {
+  const generate = () =>
+    `cs_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
+  if (typeof window === 'undefined') return generate();
+  try {
+    const existing = window.localStorage.getItem(BROWSER_SESSION_STORAGE_KEY);
+    if (existing && /^[a-zA-Z0-9_-]{8,64}$/.test(existing)) {
+      return existing;
+    }
+    const created = generate();
+    window.localStorage.setItem(BROWSER_SESSION_STORAGE_KEY, created);
+    return created;
+  } catch {
+    return generate();
+  }
+}
+
 export default function App() {
   const isAutostart =
     typeof window !== 'undefined' &&
@@ -143,10 +164,19 @@ export default function App() {
   const [accountCharacters, setAccountCharacters] = useState<AccountCharacterRecord[]>([]);
   const [maxCharacterSlots, setMaxCharacterSlots] = useState<number>(3);
   const [loadingCharacters, setLoadingCharacters] = useState<boolean>(true);
+  const [accountSessionReady, setAccountSessionReady] = useState<boolean>(false);
   const [activeCharacterId, setActiveCharacterId] = useState<string | null>(null);
   const activeCharacterIdRef = useRef<string | null>(null);
   activeCharacterIdRef.current = activeCharacterId;
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Single-instance session protection (prevents duplicate player tabs on the server)
+  const browserSessionKeyRef = useRef<string>(getOrCreateBrowserSessionKey());
+  const [sessionReplacedReason, setSessionReplacedReason] = useState<string | null>(null);
+  const sessionReplacedRef = useRef<boolean>(false);
+  sessionReplacedRef.current = sessionReplacedReason !== null;
+  const [reconnectEpoch, setReconnectEpoch] = useState<number>(0);
+  const pendingSpawnVitalsRef = useRef<{ x: number; y: number; hp: number; mp: number } | null>(null);
 
   const [hudSync, setHudSync] = useState<{
     cooldowns: Record<string, number>;
@@ -227,6 +257,7 @@ export default function App() {
       // Non-fatal offline fallback
     } finally {
       setLoadingCharacters(false);
+      setAccountSessionReady(true);
     }
   }, []);
 
@@ -235,6 +266,7 @@ export default function App() {
   }, [fetchAccountCharacters]);
 
   const persistActiveCharacterNow = useCallback((useKeepalive = false) => {
+    if (sessionReplacedRef.current) return;
     const charId = activeCharacterIdRef.current;
     if (!charId) return;
     const p = playerStateRef.current;
@@ -305,14 +337,46 @@ export default function App() {
     };
   }, [phase, activeCharacterId, persistActiveCharacterNow]);
 
-  // Real-time WebSocket Connection & Automatic Reconnection for Online Co-op Party
+  // Real-time WebSocket Connection & Automatic Reconnection for Online Co-op Party.
+  // Only connects once account session cookie is ready AND the player has actually entered the world
+  // (never spawns a phantom hero while sitting on the Title/Character Select screen, and stops
+  // reconnecting immediately if superseded by another tab/window).
+  const shouldBeOnline = accountSessionReady && phase !== 'title' && sessionReplacedReason === null;
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
+
+    if (!shouldBeOnline) {
+      const existingWs = wsRef.current;
+      if (existingWs) {
+        if (existingWs.readyState === WebSocket.OPEN && !sessionReplacedRef.current) {
+          try {
+            existingWs.send(JSON.stringify({ type: 'party:leave_world' }));
+          } catch {
+            // Ignore send failure during teardown
+          }
+        }
+        existingWs.onclose = null;
+        existingWs.onerror = null;
+        existingWs.onmessage = null;
+        existingWs.close(1000, 'lobby_or_replaced');
+        wsRef.current = null;
+      }
+      setPartyConnected(false);
+      if (phase === 'title') {
+        setPartyMembers([]);
+        setActiveParty(null);
+        activePartyRef.current = null;
+        setPendingPartyInvite(null);
+      }
+      return;
+    }
+
     let unmounted = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
     const connectWs = () => {
-      if (unmounted) return;
+      if (unmounted || sessionReplacedRef.current) return;
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${proto}//${window.location.host}/ws`;
       let socket: WebSocket;
@@ -325,18 +389,24 @@ export default function App() {
       wsRef.current = socket;
 
       socket.onopen = () => {
-        if (unmounted) return;
+        if (unmounted || sessionReplacedRef.current) {
+          socket.close(1000);
+          return;
+        }
         setPartyConnected(true);
         setPartyError(null);
         const p = playerStateRef.current;
         const derived = calculateDerivedStats(p);
-        const vitals = engineActionsRef.current?.getHeroRuntimeVitals();
+        const vitals =
+          pendingSpawnVitalsRef.current ?? engineActionsRef.current?.getHeroRuntimeVitals();
+        pendingSpawnVitalsRef.current = null;
         socket.send(
           JSON.stringify({
             type: 'party:join',
             roomCode: partyRoomCodeRef.current,
             nickname: partyNicknameRef.current,
             characterId: activeCharacterIdRef.current ?? undefined,
+            clientSessionKey: browserSessionKeyRef.current,
             classId: p.classId,
             classTier: p.classTier,
             level: p.level,
@@ -844,6 +914,20 @@ export default function App() {
           return;
         }
 
+        if (data.type === 'party:session_replaced') {
+          const reason =
+            typeof data.reason === 'string'
+              ? data.reason
+              : 'Ваш персонаж или аккаунт уже открыт в другой вкладке или окне.';
+          sessionReplacedRef.current = true;
+          setSessionReplacedReason(reason);
+          setPartyConnected(false);
+          setAutoHunt(false);
+          setActiveTradeSession(null);
+          setPendingPartyInvite(null);
+          return;
+        }
+
         if (data.type === 'party:error') {
           const errMsg = typeof data.message === 'string' ? data.message : 'Ошибка пати';
           setPartyError(errMsg);
@@ -851,9 +935,20 @@ export default function App() {
         }
       };
 
-      socket.onclose = () => {
+      socket.onclose = (ev) => {
         if (unmounted) return;
         setPartyConnected(false);
+        if (ev.code === WS_CLOSE_SESSION_REPLACED || sessionReplacedRef.current) {
+          if (!sessionReplacedRef.current) {
+            sessionReplacedRef.current = true;
+            setSessionReplacedReason(
+              'Ваш персонаж или аккаунт уже открыт в другой вкладке или окне.'
+            );
+            setAutoHunt(false);
+            setActiveTradeSession(null);
+          }
+          return;
+        }
         reconnectTimer = setTimeout(connectWs, 2200);
       };
 
@@ -868,10 +963,22 @@ export default function App() {
       unmounted = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (wsRef.current) {
-        wsRef.current.close();
+        const currentWs = wsRef.current;
+        if (currentWs.readyState === WebSocket.OPEN && !sessionReplacedRef.current) {
+          try {
+            currentWs.send(JSON.stringify({ type: 'party:leave_world' }));
+          } catch {
+            // Ignore send errors on unmount
+          }
+        }
+        currentWs.onclose = null;
+        currentWs.onerror = null;
+        currentWs.onmessage = null;
+        currentWs.close(1000);
+        wsRef.current = null;
       }
     };
-  }, []);
+  }, [shouldBeOnline, reconnectEpoch]);
 
   const handleUpdatePartyIdentity = useCallback(
     (rawNick: string, rawRoom: string) => {
@@ -900,6 +1007,7 @@ export default function App() {
             roomCode: nextRoom,
             nickname: nextNick,
             characterId: activeCharacterIdRef.current ?? undefined,
+            clientSessionKey: browserSessionKeyRef.current,
             classId: p.classId,
             classTier: p.classTier,
             level: p.level,
@@ -1303,6 +1411,8 @@ export default function App() {
       // Fallback to cached lobby record
     }
 
+    sessionReplacedRef.current = false;
+    setSessionReplacedReason(null);
     activeCharacterIdRef.current = latestRecord.id;
     setActiveCharacterId(latestRecord.id);
     setSelectedClass(latestRecord.player.classId);
@@ -1310,16 +1420,6 @@ export default function App() {
     partyNicknameRef.current = latestRecord.nickname;
     setPlayer(latestRecord.player);
     playerStateRef.current = latestRecord.player;
-
-    setAutoHunt(false);
-    setInventoryOpen(false);
-    setStatsOpen(false);
-    setShopOpen(false);
-    setActiveDragPayload(null);
-    setActiveDrawer('none');
-    setEndSnapshot(null);
-    sessionStartRef.current = Date.now();
-    setPhase('playing');
 
     const derived = calculateDerivedStats(latestRecord.player);
     const restoredHp =
@@ -1331,15 +1431,34 @@ export default function App() {
         ? Math.min(derived.maxMp, latestRecord.currentMp)
         : derived.maxMp;
 
-    // Bind live WebSocket connection to this server-hosted character
+    pendingSpawnVitalsRef.current = {
+      x: latestRecord.posX,
+      y: latestRecord.posY,
+      hp: restoredHp,
+      mp: restoredMp,
+    };
+
+    setAutoHunt(false);
+    setInventoryOpen(false);
+    setStatsOpen(false);
+    setShopOpen(false);
+    setActiveDragPayload(null);
+    setActiveDrawer('none');
+    setEndSnapshot(null);
+    sessionStartRef.current = Date.now();
+    setPhase('playing');
+
+    // If WebSocket is already open, bind immediately; otherwise the online effect opens & joins cleanly
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
+      pendingSpawnVitalsRef.current = null;
       ws.send(
         JSON.stringify({
           type: 'party:join',
           roomCode: partyRoomCodeRef.current,
           nickname: latestRecord.nickname,
           characterId: latestRecord.id,
+          clientSessionKey: browserSessionKeyRef.current,
           classId: latestRecord.player.classId,
           classTier: latestRecord.player.classTier,
           level: latestRecord.player.level,
@@ -1373,13 +1492,62 @@ export default function App() {
     }, 30);
   }, []);
 
+  const handleReclaimSession = useCallback(async () => {
+    const charId = activeCharacterIdRef.current;
+    if (charId) {
+      try {
+        const res = await fetch(`/api/account/characters/${encodeURIComponent(charId)}`, {
+          method: 'GET',
+          credentials: 'include',
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { ok?: boolean; character?: AccountCharacterRecord };
+          if (data.ok && data.character) {
+            const latest = data.character;
+            const derived = calculateDerivedStats(latest.player);
+            const restoredHp =
+              latest.currentHp > 0 ? Math.min(derived.maxHp, latest.currentHp) : derived.maxHp;
+            const restoredMp =
+              latest.currentMp > 0 ? Math.min(derived.maxMp, latest.currentMp) : derived.maxMp;
+            setPlayer(latest.player);
+            playerStateRef.current = latest.player;
+            pendingSpawnVitalsRef.current = {
+              x: latest.posX,
+              y: latest.posY,
+              hp: restoredHp,
+              mp: restoredMp,
+            };
+            engineActionsRef.current?.applyServerHeroVitals({
+              x: latest.posX,
+              y: latest.posY,
+              hp: restoredHp,
+              mp: restoredMp,
+            });
+          }
+        }
+      } catch {
+        // Fallback to local state if fetch fails
+      }
+    }
+    sessionReplacedRef.current = false;
+    setSessionReplacedReason(null);
+    setReconnectEpoch((prev) => prev + 1);
+  }, []);
+
   const handleReturnToLobby = useCallback(() => {
-    persistActiveCharacterNow(false);
+    if (!sessionReplacedRef.current) {
+      persistActiveCharacterNow(false);
+    }
+    sessionReplacedRef.current = false;
+    setSessionReplacedReason(null);
+    activeCharacterIdRef.current = null;
+    setActiveCharacterId(null);
     setPhase('title');
     setInventoryOpen(false);
     setStatsOpen(false);
     setShopOpen(false);
     setActiveDrawer('none');
+    setActiveTradeSession(null);
     setEndSnapshot(null);
     setTimeout(() => {
       void fetchAccountCharacters();
@@ -2003,7 +2171,7 @@ export default function App() {
       onDrop={handleWorldBackdropDrop}
     >
       <GameCanvas
-        phase={phase}
+        phase={sessionReplacedReason ? 'paused' : phase}
         player={player}
         autoHunt={autoHunt && player.level >= 5}
         wsConnected={partyConnected}
@@ -2288,6 +2456,13 @@ export default function App() {
             engineActionsRef.current?.resetTerritoryArena(true);
           }}
           onReturnTitle={handleReturnToLobby}
+        />
+      )}
+      {sessionReplacedReason && (
+        <SessionReplacedModal
+          reason={sessionReplacedReason}
+          onContinueHere={() => void handleReclaimSession()}
+          onReturnToLobby={handleReturnToLobby}
         />
       )}
       <MobileOrientationGuard />
