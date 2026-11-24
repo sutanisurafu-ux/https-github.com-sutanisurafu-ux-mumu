@@ -471,7 +471,12 @@ function extractBearerToken(req: express.Request): string {
 
 async function startServer() {
   const app = express();
-  const port = Number(process.env.PORT) || SERVER_CONFIG.defaultPort;
+  const envPort = Number(process.env.PORT);
+  const nginxPort = Number(process.env.NGINX_PORT);
+  const port =
+    process.env.NODE_ENV === 'production' && envPort && envPort !== nginxPort
+      ? envPort
+      : Number(process.env.DEFAULT_APP_PORT) || SERVER_CONFIG.defaultPort;
 
   app.disable('x-powered-by');
   app.use(express.json({ limit: SERVER_CONFIG.restJsonBodyLimit }));
@@ -1579,7 +1584,7 @@ async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true, hmr: false },
+      server: { middlewareMode: true, hmr: false, ws: false },
       appType: 'spa',
     });
     app.use(vite.middlewares);
