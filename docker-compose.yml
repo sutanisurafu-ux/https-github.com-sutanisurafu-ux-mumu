@@ -1,0 +1,16 @@
+services:
+  mu-legends-online:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mu-legends-online
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DB_PATH=/app/data/mu_continent.sqlite
+    volumes:
+      - ./data:/app/data
+
