@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CLASSES,
   TERRITORIES,
@@ -6,8 +6,21 @@ import {
   createInitialPlayerState,
   getClassDisplayTitle,
 } from '../game/rules';
-import { AccountCharacterRecord, CharacterClassId } from '../game/types';
+import { AccountCharacterRecord, CharacterClassId, ClassTier, TerritoryId } from '../game/types';
 import { HeroModelPreview } from './HeroModelPreview';
+
+interface LeaderboardEntry {
+  id: string;
+  nickname: string;
+  classId: CharacterClassId;
+  classTier: ClassTier;
+  level: number;
+  resets: number;
+  territoryId: TerritoryId;
+  totalKills: number;
+  bossesDefeated: number;
+  bloodCastleClears: number;
+}
 
 interface TitleScreenProps {
   characters: AccountCharacterRecord[];
@@ -34,6 +47,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   onDeleteCharacter,
 }) => {
   const [imgFailed, setImgFailed] = useState(false);
+  const [activeSection, setActiveSection] = useState<'characters' | 'leaders'>('characters');
   const [mode, setMode] = useState<'lobby' | 'create'>('lobby');
   const [selectedCharId, setSelectedCharId] = useState<string | null>(null);
   const [nameInput, setNameInput] = useState<string>('');
@@ -45,6 +59,52 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState<boolean>(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [leaders, setLeaders] = useState<LeaderboardEntry[]>([]);
+  const [loadingLeaders, setLoadingLeaders] = useState<boolean>(false);
+  const [leadersError, setLeadersError] = useState<string | null>(null);
+
+  const loadLeaderboard = useCallback(async () => {
+    setLoadingLeaders(true);
+    setLeadersError(null);
+    try {
+      const res = await fetch('/api/characters?limit=100', {
+        method: 'GET',
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        setLeadersError('Не удалось загрузить таблицу лидеров.');
+        return;
+      }
+      const data = (await res.json()) as {
+        ok?: boolean;
+        characters?: LeaderboardEntry[];
+      };
+      if (data.ok && Array.isArray(data.characters)) {
+        const sorted = [...data.characters].sort(
+          (a, b) =>
+            b.resets - a.resets ||
+            b.level - a.level ||
+            b.totalKills - a.totalKills
+        );
+        setLeaders(sorted);
+      }
+    } catch {
+      setLeadersError('Нет связи с сервером.');
+    } finally {
+      setLoadingLeaders(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeSection === 'leaders') {
+      void loadLeaderboard();
+    }
+  }, [activeSection, loadLeaderboard]);
+
+  const ownCharacterIdSet = useMemo(
+    () => new Set(characters.map((c) => c.id)),
+    [characters]
+  );
 
   // Sync mode & selected character when account characters load or change
   useEffect(() => {
@@ -244,7 +304,179 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
             </div>
           </div>
 
-          {loadingCharacters ? (
+          {/* Main Menu Section Switcher: Мои персонажи / Лидеры */}
+          <div
+            className="mb-3 flex flex-wrap items-center justify-between gap-2"
+            role="tablist"
+            aria-label="Разделы главного меню"
+          >
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeSection === 'characters'}
+                data-testid="menu-tab-characters"
+                onClick={() => setActiveSection('characters')}
+                className={`min-h-[38px] rounded-xl px-4 py-1.5 font-display text-xs font-bold tracking-wide transition-colors cursor-pointer sm:text-sm ${
+                  activeSection === 'characters'
+                    ? 'bg-amber-500 text-[#09080c] shadow-[0_4px_16px_rgba(245,158,11,0.35)]'
+                    : 'gothic-button text-[#dfd7c8]'
+                }`}
+              >
+                ⚔️ Мои персонажи ({characters.length}/{maxSlots})
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeSection === 'leaders'}
+                data-testid="menu-tab-leaders"
+                onClick={() => setActiveSection('leaders')}
+                className={`min-h-[38px] rounded-xl px-4 py-1.5 font-display text-xs font-bold tracking-wide transition-colors cursor-pointer sm:text-sm ${
+                  activeSection === 'leaders'
+                    ? 'bg-amber-500 text-[#09080c] shadow-[0_4px_16px_rgba(245,158,11,0.35)]'
+                    : 'gothic-button text-[#dfd7c8]'
+                }`}
+              >
+                🏆 Лидеры
+              </button>
+            </div>
+
+            {activeSection === 'leaders' && (
+              <button
+                type="button"
+                data-testid="leaders-refresh-button"
+                onClick={() => void loadLeaderboard()}
+                disabled={loadingLeaders}
+                className="gothic-button min-h-[34px] rounded-xl px-3 py-1 text-xs font-semibold text-amber-200 disabled:opacity-50 cursor-pointer"
+              >
+                {loadingLeaders ? 'Обновление...' : '↻ Обновить'}
+              </button>
+            )}
+          </div>
+
+          {activeSection === 'leaders' ? (
+            /* SERVER LEADERS RANKING TABLE (Resets DESC, Level DESC) */
+            <div
+              data-testid="leaders-view"
+              className="gothic-panel flex flex-col overflow-hidden rounded-2xl"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/25 bg-[#161221] px-4 py-2.5">
+                <div>
+                  <h2 className="font-display text-sm font-bold text-amber-300 sm:text-base">
+                    🏆 Зал Славы — Лидеры сервера
+                  </h2>
+                  <p className="text-[11px] text-[#bfb5a4]">
+                    Рейтинг по убыванию: сначала по числу <strong className="text-amber-200">Ресетов</strong>, при равенстве — по <strong className="text-emerald-300">Уровню</strong>.
+                  </p>
+                </div>
+                <span className="font-mono-num text-[11px] text-[#cfc6b8]">
+                  Всего героев: <strong className="text-amber-300">{leaders.length}</strong>
+                </span>
+              </div>
+
+              {leadersError ? (
+                <div className="p-6 text-center text-xs font-semibold text-rose-300">
+                  ⚠ {leadersError}
+                </div>
+              ) : loadingLeaders && leaders.length === 0 ? (
+                <div className="p-6 text-center text-xs text-amber-200">
+                  Загрузка рейтинга лидеров с сервера...
+                </div>
+              ) : leaders.length === 0 ? (
+                <div className="p-6 text-center text-xs text-[#bfb5a4]">
+                  На сервере пока нет созданных персонажей. Создайте первого героя и возглавьте таблицу!
+                </div>
+              ) : (
+                <div className="max-h-[54dvh] overflow-auto sm:max-h-[390px]">
+                  <table
+                    data-testid="leaders-table"
+                    className="w-full border-collapse text-left text-xs"
+                  >
+                    <thead className="sticky top-0 z-10 bg-[#14101f] text-[10px] uppercase tracking-wider text-[#b5ab9b] shadow-[0_1px_0_rgba(245,158,11,0.22)] sm:text-[11px]">
+                      <tr>
+                        <th className="w-10 whitespace-nowrap px-2 py-2.5 text-center">#</th>
+                        <th className="whitespace-nowrap px-2.5 py-2.5">Персонаж</th>
+                        <th className="whitespace-nowrap px-2.5 py-2.5">Класс</th>
+                        <th className="whitespace-nowrap px-2.5 py-2.5 text-right text-amber-300">Ресеты ↓</th>
+                        <th className="whitespace-nowrap px-2.5 py-2.5 text-right text-emerald-300">Уровень ↓</th>
+                        <th className="hidden whitespace-nowrap px-2.5 py-2.5 sm:table-cell">Локация</th>
+                        <th className="hidden whitespace-nowrap px-2.5 py-2.5 text-right md:table-cell">Убийства</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/8 font-mono-num">
+                      {leaders.map((entry, idx) => {
+                        const rank = idx + 1;
+                        const cls = CLASSES[entry.classId];
+                        const isOwn = ownCharacterIdSet.has(entry.id);
+                        const terrName =
+                          TERRITORIES.find((t) => t.id === entry.territoryId)?.name ??
+                          entry.territoryId;
+                        const rankDisplay =
+                          rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `${rank}`;
+
+                        return (
+                          <tr
+                            key={entry.id}
+                            data-testid={`leader-row-${idx}`}
+                            data-leader-name={entry.nickname}
+                            className={`transition-colors ${
+                              isOwn
+                                ? 'bg-amber-500/14 hover:bg-amber-500/20'
+                                : rank <= 3
+                                  ? 'bg-[#1a1526]/80 hover:bg-[#221b31]'
+                                  : 'hover:bg-white/[0.04]'
+                            }`}
+                          >
+                            <td className="px-2 py-2 text-center font-bold text-[#dfd7c8]">
+                              {rankDisplay}
+                            </td>
+                            <td className="max-w-[140px] truncate px-2.5 py-2 font-sans font-bold text-[#fdf8ed]">
+                              <span>{entry.nickname}</span>
+                              {isOwn && (
+                                <span className="ml-1.5 rounded bg-amber-500/25 px-1.5 py-0.5 font-mono-num text-[9px] font-extrabold text-amber-300">
+                                  Вы
+                                </span>
+                              )}
+                            </td>
+                            <td className="max-w-[165px] px-2.5 py-2 font-sans text-[11px] text-[#d6cec2]">
+                              <span className="flex min-w-0 items-center gap-1.5">
+                                <span
+                                  className="h-2 w-2 shrink-0 rounded-full"
+                                  style={{ backgroundColor: cls.accentColor }}
+                                  aria-hidden="true"
+                                />
+                                <span
+                                  className="truncate"
+                                  title={getClassDisplayTitle(entry.classId, entry.classTier)}
+                                >
+                                  {getClassDisplayTitle(entry.classId, entry.classTier)}
+                                </span>
+                              </span>
+                            </td>
+                            <td className="px-2.5 py-2 text-right font-extrabold text-amber-300">
+                              {entry.resets}
+                            </td>
+                            <td className="px-2.5 py-2 text-right font-bold text-emerald-300">
+                              {entry.level}
+                            </td>
+                            <td
+                              className="hidden max-w-[145px] truncate px-2.5 py-2 font-sans text-[11px] text-[#bfb5a4] sm:table-cell"
+                              title={terrName}
+                            >
+                              {terrName}
+                            </td>
+                            <td className="hidden px-2.5 py-2 text-right text-[#bfb5a4] md:table-cell">
+                              {entry.totalKills}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          ) : loadingCharacters ? (
             <div className="gothic-panel rounded-2xl p-6 text-center text-sm text-amber-200">
               Загрузка сохранённых персонажей с сервера...
             </div>

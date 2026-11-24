@@ -1502,7 +1502,30 @@ test('SQLite accounts start with 0 characters, enforce server-wide unique names 
     assert.equal(reloaded.record.currentHp, 180);
     assert.equal(reloaded.record.currentMp, 70);
 
-    // 7. Deleting a character frees the slot and releases the unique name
+    // 7. Leaderboard sorts strictly by resets DESC, then level DESC
+    db.updateCharacterForAccount({
+      characterId: c1.record.id,
+      accountId: acc1.accountId,
+      player: { ...c1.record.player, resets: 1, level: 120 },
+    });
+    db.updateCharacterForAccount({
+      characterId: c2.record.id,
+      accountId: acc1.accountId,
+      player: { ...c2.record.player, resets: 2, level: 15 },
+    });
+    db.updateCharacterForAccount({
+      characterId: c3.record.id,
+      accountId: acc1.accountId,
+      player: { ...c3.record.player, resets: 1, level: 260 },
+    });
+    const leaders = db.listCharacterSummaries(10);
+    assert.deepEqual(
+      leaders.map((l) => l.nickname),
+      ['ВолшебникСвета', 'FairyQueen', 'DarkBlade'],
+      'Leaderboard must sort by resets DESC first (2 Res Lv15 > 1 Res Lv260), then level DESC (Lv260 > Lv120)'
+    );
+
+    // 8. Deleting a character frees the slot and releases the unique name
     const delRes = db.deleteCharacterForAccount(c3.record.id, acc1.accountId);
     assert.equal(delRes, 'ok');
     assert.equal(db.listAccountCharacters(acc1.accountId).length, 2);
