@@ -207,9 +207,9 @@ export const CHARACTER_SCALING = {
     /** +35% множитель к итоговому HP за каждый ресет */
     hpMultiplierPerReset: 0.35,
     /** Плоские бонусы за каждый ресет до множителей */
-    flatAttackPerReset: 1450,
-    flatDefensePerReset: 880,
-    flatHpPerReset: 7500,
+    flatAttackPerReset: 1,
+    flatDefensePerReset: 2,
+    flatHpPerReset: 5,
   },
 
   /** Скейлинг брони монстров по enemyLevelMultiplier территории */
